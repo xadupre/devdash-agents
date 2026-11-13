@@ -91,7 +91,7 @@ function isMessage(value: unknown): value is ChatMessage {
     (value.timings === undefined ||
       (Array.isArray(value.timings) && value.timings.every(isStepTiming))) &&
     (value.error === undefined || typeof value.error === "boolean") &&
-    ["title", "timestamp", "agentId", "details"].every(
+    ["title", "timestamp", "agentId", "toolCallId", "details"].every(
       (key) => value[key] === undefined || typeof value[key] === "string",
     )
   );
@@ -176,6 +176,9 @@ function parseConversation(value: unknown): SavedConversation {
       title: message.title,
       timestamp: message.timestamp,
       agentId: message.agentId,
+      ...(message.toolCallId !== undefined
+        ? { toolCallId: message.toolCallId }
+        : {}),
       details: message.details,
       error: message.error,
       ...(message.timings

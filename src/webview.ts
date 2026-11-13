@@ -26,12 +26,180 @@ declare function acquireVsCodeApi(): {
   const sessionsView = element("sessions-view", HTMLElement);
   const datasetView = element("dataset-view", HTMLElement);
   const logView = element("log-view", HTMLElement);
+  const traceView = element("trace-view", HTMLElement);
+  const traceEvent = element("trace-event", HTMLElement);
+  const traceReasoning = element("trace-reasoning", HTMLElement);
+  const traceCommands = element("trace-commands", HTMLElement);
+  const TRACE_COMMANDS = 5;
+  const TRACE_OUTPUT_CHARS = 8000;
+  let traceRenderedKey: string | undefined;
+  function toolCallIdOf(
+    message: State["messages"][number],
+  ): string | undefined {
+    if (message.toolCallId) return message.toolCallId;
+    if (!message.details) return undefined;
+    try {
+      const id = (JSON.parse(message.details) as { toolCallId?: unknown })
+        .toolCallId;
+      return typeof id === "string" ? id : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  function traceTail(text: string): string {
+    return text.length > TRACE_OUTPUT_CHARS
+      ? `… (${text.length - TRACE_OUTPUT_CHARS} earlier characters omitted)\n${text.slice(-TRACE_OUTPUT_CHARS)}`
+      : text;
+  }
+  function renderTrace(): void {
+    const all = state?.messages ?? [];
+    const latest = all.at(-1);
+    const reasoning = [...all]
+      .reverse()
+      .find((message) => message.role === "reasoning");
+    const commands: {
+      tool: State["messages"][number];
+      outputs: State["messages"][number][];
+    }[] = [];
+    for (let index = all.length - 1; index >= 0; index--) {
+      const tool = all[index]!;
+      if (tool.role !== "tool") continue;
+      const id = toolCallIdOf(tool);
+      const outputs = id
+        ? all
+            .slice(index + 1)
+            .filter(
+              (message) =>
+                message.role === "output" &&
+                (message.agentId ?? "") === (tool.agentId ?? "") &&
+                toolCallIdOf(message) === id,
+            )
+        : [];
+      commands.push({ tool, outputs });
+      if (commands.length === TRACE_COMMANDS) break;
+    }
+    const key = JSON.stringify([
+      state?.activeId,
+      latest && [
+        latest.role,
+        latest.title,
+        latest.timestamp,
+        latest.agentId,
+        latest.error,
+        latest.content.length,
+        latest.content.slice(-200),
+      ],
+      reasoning?.html ?? reasoning?.content,
+      commands.map(({ tool, outputs }) => [
+        tool.title,
+        tool.content,
+        tool.error,
+        outputs.map((output) => [output.content.length, output.error]),
+      ]),
+    ]);
+    if (key === traceRenderedKey) return;
+    traceRenderedKey = key;
+    if (latest) {
+      const article = document.createElement("article");
+      article.className = `trace-command trace-event ${latest.role}`;
+      if (latest.error) article.classList.add("failed");
+      const heading = document.createElement("h4");
+      heading.textContent =
+        (latest.title ||
+          { ...roleLabels, user: "User", assistant: "Assistant" }[
+            latest.role
+          ]) + (latest.agentId ? ` [${latest.agentId}]` : "");
+      if (latest.timestamp) {
+        const time = document.createElement("time");
+        time.dateTime = latest.timestamp;
+        time.textContent = ` · ${new Date(latest.timestamp).toLocaleTimeString()}`;
+        heading.append(time);
+      }
+      const content = document.createElement("pre");
+      content.className = "trace-output";
+      content.textContent = traceTail(latest.content);
+      article.append(heading, content);
+      traceEvent.replaceChildren(article);
+    } else traceEvent.textContent = "No events yet.";
+    if (reasoning) {
+      const content = document.createElement("div");
+      content.className = "trace-reasoning content";
+      if (reasoning.html !== undefined) content.innerHTML = reasoning.html;
+      else content.textContent = reasoning.content;
+      traceReasoning.replaceChildren(content);
+    } else traceReasoning.textContent = "No reasoning yet.";
+    traceCommands.replaceChildren(
+      ...commands.map(({ tool, outputs }) => {
+        const article = document.createElement("article");
+        article.className = "trace-command";
+        const completion = [...outputs]
+          .reverse()
+          .find((output) => output.details);
+        if (tool.error || completion?.error) article.classList.add("failed");
+        const heading = document.createElement("h4");
+        heading.textContent =
+          (tool.title ?? "Tool") + (tool.agentId ? ` [${tool.agentId}]` : "");
+        const command = document.createElement("pre");
+        command.className = "trace-input";
+        command.textContent = tool.content;
+        const output = document.createElement("pre");
+        output.className = "trace-output";
+        const text = (completion ? [completion] : outputs)
+          .map((message) => message.content)
+          .join("\n");
+        output.textContent =
+          traceTail(text) ||
+          (tool.title?.endsWith(" - running") ? "Running…" : "No output.");
+        article.append(heading, command, output);
+        return article;
+      }),
+    );
+    if (!commands.length) traceCommands.textContent = "No commands yet.";
+  }
   const settingsView = element("settings-view", HTMLElement);
   const applicationLogs = element("application-logs", HTMLElement);
   const executionTiming = element("execution-timing", HTMLElement);
+  const timingTooltip = document.createElement("div");
+  timingTooltip.id = "timing-tooltip";
+  timingTooltip.role = "tooltip";
+  timingTooltip.hidden = true;
+  document.body.append(timingTooltip);
+  const timingDetails = new Map<string, () => void>();
+  let activeTimingKey: string | undefined;
+  function updateTimingTooltip(): void {
+    const show = activeTimingKey && timingDetails.get(activeTimingKey);
+    timingTooltip.hidden = !show;
+    if (show) show();
+  }
+  for (const eventName of ["mouseover", "focusin"]) {
+    executionTiming.addEventListener(eventName, (event) => {
+      const target =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>("[data-timing-key]")
+          : null;
+      activeTimingKey = target?.dataset.timingKey;
+      updateTimingTooltip();
+    });
+  }
+  for (const eventName of ["mouseout", "focusout"]) {
+    executionTiming.addEventListener(eventName, (event) => {
+      const related = (event as MouseEvent | FocusEvent).relatedTarget;
+      if (related instanceof Node && executionTiming.contains(related)) return;
+      activeTimingKey = undefined;
+      updateTimingTooltip();
+    });
+  }
+  executionTiming.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      activeTimingKey = undefined;
+      updateTimingTooltip();
+    }
+  });
   const toolColors = new Map<string, string>();
   let timingTimer: ReturnType<typeof setInterval> | undefined;
   function renderTiming(switched = false): void {
+    if (switched) activeTimingKey = undefined;
+    timingDetails.clear();
     const focusedKey =
       !switched && document.activeElement instanceof HTMLElement
         ? document.activeElement.dataset.timingKey
@@ -68,10 +236,11 @@ declare function acquireVsCodeApi(): {
       const heading = `Step timing · ${((end - start) / 1000).toFixed(2)} s · ${request.title ? `${request.title}: ` : ""}${request.content.slice(0, 120)}`;
       const band = document.createElement("div");
       band.className = "timing-band";
+      band.dataset.timingKey = `${requestIndex}:band`;
       const laneEnds: number[] = [];
       const totals = new Map<
         string,
-        { name: string; ms: number; outputTokens?: number }
+        { name: string; color: string; ms: number; outputTokens?: number }
       >();
       const throughput = (tokens: number | undefined, ms: number): string =>
         tokens !== undefined && ms > 0
@@ -93,7 +262,7 @@ declare function acquireVsCodeApi(): {
           color = toolColors.get(step.name)!;
         }
         const key = `${step.kind}:${step.name}`;
-        const total = totals.get(key) ?? { name: step.name, ms: 0 };
+        const total = totals.get(key) ?? { name: step.name, color, ms: 0 };
         total.ms += duration;
         if (step.outputTokens !== undefined)
           total.outputTokens = (total.outputTokens ?? 0) + step.outputTokens;
@@ -115,21 +284,49 @@ declare function acquireVsCodeApi(): {
         band.append(segment);
       }
       band.style.height = `${laneEnds.length * 8}px`;
-      const summary = [
-        heading,
-        ...[...totals.values()].map(
-          (total) =>
-            `${total.name}: ${(total.ms / 1000).toFixed(2)} s${throughput(total.outputTokens, total.ms)}`,
-        ),
-      ].join("\n");
-      band.title = summary;
-      for (const segment of band.children)
-        (segment as HTMLElement).title =
-          `${summary}\n${segment.getAttribute("aria-label")}`;
+      for (const target of [
+        band,
+        ...band.querySelectorAll<HTMLElement>("span"),
+      ]) {
+        target.setAttribute("aria-describedby", timingTooltip.id);
+        timingDetails.set(target.dataset.timingKey!, () => {
+          timingTooltip.replaceChildren();
+          const headingNode = document.createElement("div");
+          headingNode.textContent = heading;
+          timingTooltip.append(headingNode);
+          const explanation = document.createElement("div");
+          explanation.textContent =
+            `${laneEnds.length} timeline ${laneEnds.length === 1 ? "row" : "rows"}. ` +
+            "Overlapping steps use separate rows; rows do not identify agents. " +
+            "Colors identify generation or tool names. Totals sum step durations.";
+          timingTooltip.append(explanation);
+          for (const total of totals.values()) {
+            const row = document.createElement("div");
+            row.className = "timing-legend";
+            const swatch = document.createElement("span");
+            swatch.className = "timing-swatch";
+            swatch.style.backgroundColor = total.color;
+            swatch.setAttribute("aria-hidden", "true");
+            const label = document.createElement("span");
+            label.textContent = `${total.name}: ${(total.ms / 1000).toFixed(2)} s${throughput(total.outputTokens, total.ms)}`;
+            row.append(swatch, label);
+            timingTooltip.append(row);
+          }
+          if (target !== band) {
+            const detail = document.createElement("div");
+            detail.textContent = `Selected step · ${target.getAttribute("aria-label")}`;
+            timingTooltip.append(detail);
+          }
+          const rect = band.getBoundingClientRect();
+          timingTooltip.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - timingTooltip.offsetWidth - 12))}px`;
+          timingTooltip.style.top = `${Math.max(timingTooltip.offsetHeight + 8, rect.top - 8)}px`;
+        });
+      }
       section.append(band);
       executionTiming.append(section);
     }
     focusTarget?.focus({ preventScroll: true });
+    updateTimingTooltip();
     if (running && timingTimer === undefined)
       timingTimer = setInterval(renderTiming, 250);
     else if (!running && timingTimer !== undefined) {
@@ -148,6 +345,7 @@ declare function acquireVsCodeApi(): {
     const view = button.dataset.view;
     repositoryView.hidden = view !== "repositories";
     activityView.hidden = view !== "activity";
+    traceView.hidden = view !== "trace";
     sessionsView.hidden = view !== "sessions";
     datasetView.hidden = view !== "dataset";
     logView.hidden = view !== "logs";
@@ -1500,6 +1698,7 @@ declare function acquireVsCodeApi(): {
     }
     state = next;
     renderTiming(switched);
+    renderTrace();
     const logs = next.logs ?? [];
     const lastLogId = logs.at(-1)?.id;
     if (

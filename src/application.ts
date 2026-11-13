@@ -83,6 +83,7 @@ export interface ChatMessage {
   title?: string;
   timestamp?: string;
   agentId?: string;
+  toolCallId?: string;
   details?: string;
   error?: boolean;
   images?: ImageAttachment[];
@@ -2698,6 +2699,7 @@ export class AgentApplication {
       content: string,
       append: boolean,
       title?: string,
+      toolCallId?: string,
     ): void => {
       const id = `${event.agentId ?? ""}:${key}`;
       const previous = session.eventMessages.get(id);
@@ -2710,6 +2712,7 @@ export class AgentApplication {
           title,
           timestamp: event.timestamp,
           agentId: event.agentId,
+          ...(toolCallId ? { toolCallId } : {}),
         };
         session.eventMessages.set(id, message);
         push(message);
@@ -2779,6 +2782,7 @@ export class AgentApplication {
           event.data.text,
           true,
           `${event.data.toolCallId} (${event.data.stream ?? "stdout"})`,
+          event.data.toolCallId,
         );
         break;
       case "assistant.tool_call_delta":
@@ -2808,6 +2812,7 @@ export class AgentApplication {
           message.error = true;
         } else if (event.type === "tool.execution_start") {
           message.role = "tool";
+          message.toolCallId = event.data.toolCallId;
           message.title = `${event.data.toolName} - running`;
           message.content = describeTool(
             event.data.toolName,
@@ -2828,6 +2833,7 @@ export class AgentApplication {
               (event.data.success ? " - completed" : " - failed");
           }
           message.role = "output";
+          message.toolCallId = event.data.toolCallId;
           message.error = !event.data.success;
           message.title = `Tool ${event.data.toolCallId}: ${event.data.success ? "completed" : "failed"}`;
           message.content =
@@ -2859,6 +2865,8 @@ export class AgentApplication {
             "output",
             event.data.partialOutput,
             false,
+            undefined,
+            event.data.toolCallId,
           );
           this.onChange(true);
           return;

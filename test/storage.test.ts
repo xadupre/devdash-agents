@@ -81,6 +81,19 @@ test("history saves are atomic, serialized, private and isolated by launch root"
   }
 });
 
+test("tool call identifiers persist and are validated", async (t) => {
+  const { directory, snapshot } = await setup(t);
+  const storage = new ApplicationStorage(directory, snapshot.root);
+  Object.assign(snapshot.sessions[0]!.messages[0]!, { toolCallId: "call-1" });
+  await storage.save(snapshot);
+  assert.equal(
+    (await storage.load())!.sessions[0]!.messages[0]!.toolCallId,
+    "call-1",
+  );
+  Object.assign(snapshot.sessions[0]!.messages[0]!, { toolCallId: 1 });
+  assert.throws(() => storage.save(snapshot), /Invalid conversation/);
+});
+
 test("step timings persist, validate bounds and freeze interrupted steps on disk", async (t) => {
   const { directory, snapshot } = await setup(t);
   const storage = new ApplicationStorage(directory, snapshot.root);

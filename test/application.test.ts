@@ -3258,6 +3258,17 @@ test("SDK events stream commands, separate output channels, reasoning and messag
       (message) => message.role === "output" && message.content === "warning\n",
     ),
   );
+  const toolCallId = transcript.find(
+    (message) => message.role === "tool",
+  )?.toolCallId;
+  assert.ok(toolCallId);
+  assert.equal(
+    transcript.filter(
+      (message) =>
+        message.role === "output" && message.toolCallId === toolCallId,
+    ).length,
+    3,
+  );
   assert.ok(
     transcript.some(
       (message) =>

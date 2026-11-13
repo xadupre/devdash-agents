@@ -253,6 +253,7 @@ export function renderApplication(resources: {
     <nav id="right-tabs" aria-label="Right panel views">
       <button type="button" data-view="repositories" aria-pressed="true" aria-controls="repository-view">Repositories</button>
       <button type="button" data-view="activity" aria-pressed="false" aria-controls="activity-view">Github</button>
+      <button type="button" data-view="trace" aria-pressed="false" aria-controls="trace-view" title="Latest event, reasoning, commands and outputs of the displayed session">Trace</button>
       <button type="button" data-view="sessions" aria-pressed="false" aria-controls="sessions-view">Sessions</button>
       <button type="button" data-view="dataset" aria-pressed="false" aria-controls="dataset-view">Dataset</button>
       <button type="button" data-view="logs" aria-pressed="false" aria-controls="log-view">Log</button>
@@ -327,6 +328,13 @@ export function renderApplication(resources: {
       <p id="github-error" role="alert" hidden></p>
       <div id="github-items"></div>
       <button id="github-more" type="button" hidden>Load more</button>
+    </section>
+    <section id="trace-view" aria-label="Session trace" hidden>
+      <h2>Trace</h2>
+      <p class="repository-hint">Latest event, reasoning, commands and outputs of the displayed session. Newest commands first.</p>
+      <details class="trace-section" open><summary><h3>Latest event</h3></summary><div id="trace-event"></div></details>
+      <details class="trace-section" open><summary><h3>Latest reasoning</h3></summary><div id="trace-reasoning"></div></details>
+      <details class="trace-section" open><summary><h3>Latest commands</h3></summary><div id="trace-commands"></div></details>
     </section>
     <section id="log-view" aria-label="Application logs" hidden>
       <h2>Log</h2>

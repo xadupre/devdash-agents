@@ -143,7 +143,7 @@ async function setupDiscussion(t: TestContext, url: string) {
 }
 
 test("timing bands scale by duration, distinguish tools and separate overlapping work", async (t) => {
-  const { document, state, publish } = await setup(t);
+  const { dom, document, state, publish } = await setup(t);
   state.activeId = "alpha";
   state.messages = [
     {
@@ -205,8 +205,34 @@ test("timing bands scale by duration, distinguish tools and separate overlapping
     panel.querySelector<HTMLElement>(".timing-band")!.style.height,
     "16px",
   );
-  assert.match(segments[0]!.title, /Token generation: 6.00 s/);
-  assert.match(segments[0]!.title, /10.00 s · Inspect files/);
+  const tooltip = document.querySelector<HTMLElement>("#timing-tooltip")!;
+  assert.equal(tooltip.hidden, true);
+  segments[0]!.dispatchEvent(
+    new dom.window.MouseEvent("mouseover", { bubbles: true }),
+  );
+  assert.equal(tooltip.hidden, false);
+  assert.match(tooltip.textContent, /Token generation: 6.00 s/);
+  assert.match(tooltip.textContent, /10.00 s · Inspect files/);
+  assert.match(tooltip.textContent, /2 timeline rows.*Overlapping steps/);
+  const legend = [...tooltip.querySelectorAll<HTMLElement>(".timing-legend")];
+  assert.equal(legend.length, 3);
+  for (const [index, segmentIndex] of [0, 1, 2].entries()) {
+    assert.equal(
+      legend[index]!.querySelector<HTMLElement>(".timing-swatch")!.style
+        .backgroundColor,
+      segments[segmentIndex]!.style.backgroundColor,
+    );
+  }
+  segments[0]!.dispatchEvent(
+    new dom.window.MouseEvent("mouseout", { bubbles: true }),
+  );
+  assert.equal(tooltip.hidden, true);
+  segments[2]!.focus();
+  assert.match(tooltip.textContent, /Selected step · search: 2.00 s \(child\)/);
+  segments[2]!.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+  );
+  assert.equal(tooltip.hidden, true);
   const color = segments[1]!.style.backgroundColor;
   state.messages.push({
     role: "user",
@@ -224,6 +250,7 @@ test("timing bands scale by duration, distinguish tools and separate overlapping
   publish(state);
   assert.equal(panel.hidden, true);
   assert.equal(panel.childElementCount, 0);
+  assert.equal(tooltip.hidden, true);
 });
 
 test("live timings update and freeze at completion while labels remain plain text", async (t) => {
@@ -238,28 +265,43 @@ test("live timings update and freeze at completion while labels remain plain tex
   state.messages = [{ role: "user", content: "Run", timings: [step] }];
   publish(state);
   const panel = document.querySelector<HTMLElement>("#execution-timing")!;
-  const first = panel.querySelector<HTMLElement>(".timing-step")!.title;
+  const first = panel
+    .querySelector<HTMLElement>(".timing-step")!
+    .getAttribute("aria-label");
   panel.querySelector<HTMLElement>(".timing-step")!.focus();
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.notEqual(
-    panel.querySelector<HTMLElement>(".timing-step")!.title,
+    panel
+      .querySelector<HTMLElement>(".timing-step")!
+      .getAttribute("aria-label"),
     first,
   );
   assert.equal(document.activeElement, panel.querySelector(".timing-step"));
   assert.match(
-    panel.querySelector<HTMLElement>(".timing-step")!.title,
+    panel
+      .querySelector<HTMLElement>(".timing-step")!
+      .getAttribute("aria-label")!,
     /running/,
   );
   assert.equal(panel.querySelector("img"), null);
+  const tooltip = document.querySelector<HTMLElement>("#timing-tooltip")!;
+  assert.equal(tooltip.hidden, false);
+  assert.equal(tooltip.querySelector("img"), null);
+  assert.match(tooltip.textContent, /running/);
   step.end = step.start + 1500;
   publish(state);
-  const completed = panel.querySelector<HTMLElement>(".timing-step")!.title;
+  const completed = panel
+    .querySelector<HTMLElement>(".timing-step")!
+    .getAttribute("aria-label")!;
   assert.equal(document.activeElement, panel.querySelector(".timing-step"));
   assert.doesNotMatch(completed!, /running/);
   assert.match(completed!, /1.50 s/);
+  assert.doesNotMatch(tooltip.textContent, /running/);
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(
-    panel.querySelector<HTMLElement>(".timing-step")!.title,
+    panel
+      .querySelector<HTMLElement>(".timing-step")!
+      .getAttribute("aria-label"),
     completed,
   );
 });
@@ -291,15 +333,15 @@ test("local generation is colored and exposes throughput only on hover", async (
   assert.equal(segment.style.backgroundColor, "rgb(55, 148, 255)");
   assert.equal(segment.style.width, "100%");
   assert.equal(panel.textContent, "");
-  assert.match(segment.title, /20.00 tokens\/s/);
+  segment.focus();
+  const tooltip = document.querySelector<HTMLElement>("#timing-tooltip")!;
+  assert.match(tooltip.textContent, /20.00 tokens\/s/);
+  assert.match(tooltip.textContent, /1 timeline row\./);
   assert.match(segment.getAttribute("aria-label")!, /20.00 tokens\/s/);
   assert.equal(panel.querySelector("img"), null);
   state.messages[0]!.timings![0]!.end = 1000;
   publish(state);
-  assert.doesNotMatch(
-    panel.querySelector<HTMLElement>(".timing-step")!.title,
-    /tokens\/s|NaN|Infinity/,
-  );
+  assert.doesNotMatch(tooltip.textContent, /tokens\/s|NaN|Infinity/);
 });
 
 test("issue and PR comments publish only on explicit submit and append once without interrupting chat", async (t) => {
@@ -513,6 +555,133 @@ test("comment failures retain scoped drafts and stale acknowledgements cannot cl
   });
   open("https://github.com/acme/project/pull/2");
   assert.equal(body.value, "Other discussion");
+});
+
+test("Trace panel shows the latest reasoning, newest commands and their outputs for the displayed session", async (t) => {
+  const { document, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  const trace = document.querySelector<HTMLElement>("#trace-view")!;
+  assert.equal(trace.hidden, true);
+  document
+    .querySelector<HTMLButtonElement>('#right-tabs [data-view="trace"]')!
+    .click();
+  assert.equal(trace.hidden, false);
+  publish(state);
+  assert.match(trace.textContent!, /No events yet/);
+  assert.match(trace.textContent!, /No reasoning yet/);
+  assert.match(trace.textContent!, /No commands yet/);
+  state.messages = [
+    { role: "reasoning", content: "Old thought" },
+    { role: "tool", title: "bash - completed", content: "ls", toolCallId: "a" },
+    { role: "output", content: "file.txt\n", toolCallId: "a" },
+    {
+      role: "output",
+      content: "file.txt",
+      toolCallId: "a",
+      details: "{}",
+    },
+    { role: "reasoning", content: "**New** thought" },
+    {
+      role: "tool",
+      title: "view - completed",
+      content: "README.md",
+      details: JSON.stringify({ toolCallId: "legacy" }),
+    },
+    {
+      role: "output",
+      content: "<img src=x onerror=alert(1)>",
+      details: JSON.stringify({ toolCallId: "legacy" }),
+    },
+    {
+      role: "tool",
+      title: "bash - running",
+      content: "npm test",
+      toolCallId: "b",
+    },
+    {
+      role: "tool",
+      title: "bash - completed",
+      content: "child cmd",
+      toolCallId: "b",
+      agentId: "child",
+    },
+    {
+      role: "output",
+      content: "child output",
+      toolCallId: "b",
+      agentId: "child",
+    },
+  ];
+  publish(state);
+  const event = trace.querySelector("#trace-event")!;
+  assert.equal(event.querySelector("h4")!.textContent, "Output [child]");
+  assert.equal(event.querySelector("pre")!.textContent, "child output");
+  const reasoning = trace.querySelector("#trace-reasoning")!;
+  assert.match(reasoning.textContent!, /New thought/);
+  assert.doesNotMatch(reasoning.textContent!, /Old/);
+  assert.ok(reasoning.querySelector("strong"));
+  const commands = [
+    ...trace.querySelectorAll<HTMLElement>("#trace-commands .trace-command"),
+  ];
+  assert.deepEqual(
+    commands.map((command) => command.querySelector("h4")!.textContent),
+    [
+      "bash - completed [child]",
+      "bash - running",
+      "view - completed",
+      "bash - completed",
+    ],
+  );
+  const outputs = commands.map(
+    (command) => command.querySelector(".trace-output")!.textContent,
+  );
+  assert.deepEqual(outputs, [
+    "child output",
+    "Running…",
+    "<img src=x onerror=alert(1)>",
+    "file.txt",
+  ]);
+  assert.equal(trace.querySelector("img"), null);
+  state.messages.push({
+    role: "output",
+    content: "x".repeat(9000),
+    toolCallId: "b",
+  });
+  publish(state);
+  assert.match(
+    trace.querySelectorAll("#trace-commands .trace-output")[1]!.textContent!,
+    /^… \(1000 earlier characters omitted\)\nx{8000}$/,
+  );
+  state.messages.push({
+    role: "system",
+    title: "session.idle",
+    content: "{}",
+    timestamp: "2026-11-13T12:00:00.000Z",
+  });
+  publish(state);
+  assert.match(event.querySelector("h4")!.textContent!, /^session\.idle · /);
+  assert.equal(event.querySelector("pre")!.textContent, "{}");
+  const sections = [
+    ...trace.querySelectorAll<HTMLDetailsElement>("details.trace-section"),
+  ];
+  assert.deepEqual(
+    sections.map((section) => [section.open, section.textContent!.length > 0]),
+    [
+      [true, true],
+      [true, true],
+      [true, true],
+    ],
+  );
+  sections[1]!.open = false;
+  state.messages.push({ role: "reasoning", content: "Later thought" });
+  publish(state);
+  assert.equal(sections[1]!.open, false);
+  assert.match(reasoning.textContent!, /Later thought/);
+  state.activeId = "beta";
+  state.messages = [];
+  publish(state);
+  assert.match(trace.textContent!, /No commands yet/);
+  assert.match(trace.textContent!, /No events yet/);
 });
 
 test("right panel switches between repositories and live application logs", async (t) => {
@@ -4079,7 +4248,7 @@ test("the default transcript is concise and optional filters reveal information 
     document.querySelectorAll("#information-filters input:checked").length,
     2,
   );
-  assert.equal(document.querySelector("details:not([hidden])"), null);
+  assert.equal(document.querySelector("#messages details:not([hidden])"), null);
   for (const filter of document.querySelectorAll<HTMLInputElement>(
     "#information-filters input:not(:checked)",
   )) {
@@ -4178,10 +4347,16 @@ test("Session / events also hides raw event details without hiding tools or outp
   );
   assert.ok(filter && toolDetails);
   toolDetails.open = true;
-  assert.equal(document.querySelectorAll("details:not([hidden])").length, 2);
+  assert.equal(
+    document.querySelectorAll("#messages details:not([hidden])").length,
+    2,
+  );
   filter.click();
   for (let update = 0; update < 2; update++) {
-    assert.equal(document.querySelectorAll("details:not([hidden])").length, 0);
+    assert.equal(
+      document.querySelectorAll("#messages details:not([hidden])").length,
+      0,
+    );
     assert.equal(document.querySelectorAll(".message:not([hidden])").length, 3);
     assert.equal(
       document.querySelector(".message.tool .content")?.textContent,
@@ -4194,7 +4369,10 @@ test("Session / events also hides raw event details without hiding tools or outp
     publish(state);
   }
   filter.click();
-  assert.equal(document.querySelectorAll("details:not([hidden])").length, 2);
+  assert.equal(
+    document.querySelectorAll("#messages details:not([hidden])").length,
+    2,
+  );
   const restored = document.querySelector<HTMLDetailsElement>(
     ".message.tool details",
   );

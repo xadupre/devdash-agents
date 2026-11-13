@@ -368,6 +368,36 @@ body.resizing {
   z-index: 1;
 }
 
+#timing-tooltip {
+  position: fixed;
+  z-index: 100;
+  width: min(420px, calc(100vw - 24px));
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid var(--vscode-editorHoverWidget-border, currentColor);
+  background: var(--vscode-editorHoverWidget-background, #252526);
+  color: var(--vscode-editorHoverWidget-foreground, #cccccc);
+  transform: translateY(-100%);
+  pointer-events: none;
+  overflow-wrap: anywhere;
+}
+
+#timing-tooltip > div + div {
+  margin-top: 6px;
+}
+
+.timing-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.timing-swatch {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+}
+
 .composer-heading label {
   flex-shrink: 0;
   margin: 0;
@@ -800,6 +830,43 @@ button:disabled {
 
 .application-log.error {
   color: var(--vscode-errorForeground);
+}
+
+.trace-section > summary {
+  cursor: pointer;
+}
+
+.trace-section > summary h3 {
+  display: inline;
+}
+
+.trace-reasoning,
+.trace-command {
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+
+.trace-command h4 {
+  margin: 0 0 6px;
+}
+
+.trace-command.failed h4 {
+  color: var(--vscode-errorForeground);
+}
+
+.trace-command pre {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.trace-command .trace-input {
+  margin-bottom: 6px;
+  color: var(--vscode-descriptionForeground);
 }
 
 .repository-group {
