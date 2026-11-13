@@ -173,7 +173,7 @@
     "package:verify": "python native/verify-package.py"
   },
   "dependencies": {
-    "@github/copilot-sdk": "1.0.29",
+    "@github/copilot-sdk": "1.0.30",
     "@vscode/markdown-it-katex": "^1.1.2",
     "markdown-it": "^14.1.0"
   },
