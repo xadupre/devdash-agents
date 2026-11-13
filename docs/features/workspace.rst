@@ -4,7 +4,7 @@ Workspace
 DevDash Agents opens as a single editor tab with two resizable panels:
 
 * the selected repository's Copilot conversation on the left;
-* a shared sidebar on the right with **Repositories**, **Github**, **Log** and **Settings** views.
+* a shared sidebar on the right with **Repositories**, **Github**, **Trace**, **Log** and **Settings** views.
 
 .. figure:: ../images/workspace.png
    :alt: Markdown conversation on the left and repositories in the shared right sidebar.
@@ -31,10 +31,17 @@ Use **Refresh** to rescan the parent directory. Existing sessions remain open
 when their repositories are still present. Switching repositories preserves
 each conversation and unfinished draft.
 
+Session trace
+-------------
+
+**Trace** follows the displayed session and shows its latest event, its latest
+reasoning and its five most recent commands, newest first, each with its output.
+Long outputs keep only their last 8000 characters.
+
 Application logs
 ----------------
 
-Use **Repositories**, **Github**, **Log** and **Settings** at the top of the right panel to
+Use **Repositories**, **Github**, **Trace**, **Log** and **Settings** at the top of the right panel to
 switch views. **Github** contains the selected repository's GitHub views;
 switching sidebar views preserves their contents.
 The log shows timestamped events across repositories: local model loading and

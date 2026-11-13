@@ -237,7 +237,7 @@ Manual validation
 Install the packaged VSIX, then check:
 
 * Automatic development-tab opening and **DevDash Agents: Open** after VSIX installation.
-* Chat on the left; Repositories, Github, Sessions and Log views in the right panel.
+* Chat on the left; Repositories, Github, Trace, Sessions and Log views in the right panel.
 * Pointer/keyboard panel resizing and activity icons during startup and generation.
 * Direct-child discovery, lazy startup and context isolation while switching repositories.
 * Copilot and local sessions open at once, transfer drafts, shared local model,

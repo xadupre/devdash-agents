@@ -11,7 +11,8 @@ installed GitHub Copilot CLI**:
 - **Left:** the selected repository's Copilot conversation, rendered as HTML
   with Markdown and mathematical equations.
 - **Right:** switch between **Repositories**, **Activity** (issues, PRs, comments
-  and commits) and **Log**. Repositories lists direct child directories containing
+  and commits), **Trace** (latest event, reasoning, commands and outputs of the
+  displayed session) and **Log**. Repositories lists direct child directories containing
   a `.git` directory or file.
   Each repository has its own session, started only when you click it.
 
