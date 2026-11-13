@@ -696,20 +696,28 @@ declare function acquireVsCodeApi(): {
     update: import("./system-memory").MemoryUpdate,
   ): void => {
     const gpus = update.cuda ?? [];
+    // With a CUDA worker, only its device matters; otherwise list every GPU.
+    const shown = gpus
+      .map((gpu, index) => ({ gpu, index }))
+      .filter(
+        ({ index }) =>
+          update.deviceId === undefined || index === update.deviceId,
+      );
     const parts = [
       `CPU ${gigabytes(update.cpu.free)}`,
-      ...gpus.map(
-        (gpu, index) =>
+      ...shown.map(
+        ({ gpu, index }) =>
           `CUDA${gpus.length > 1 ? ` ${index}` : ""} ${gigabytes(gpu.free)}`,
       ),
     ];
-    systemMemory.textContent = `Free: ${parts.join(" · ")}`;
+    systemMemory.textContent = `${update.machine ? `${update.machine} free` : "Free"}: ${parts.join(" · ")}`;
     const lowMemory =
       update.cpu.free < 300 * 1024 ** 2 ||
-      gpus.some((gpu) => gpu.free < 300 * 1024 ** 2);
+      shown.some(({ gpu }) => gpu.free < 300 * 1024 ** 2);
     if (lowMemory) systemMemory.textContent += " · Low memory: offload a model";
     systemMemory.classList.toggle("memory-warning", lowMemory);
     systemMemory.title = [
+      `Memory of ${update.machine ?? "this computer"} (the worker machine of the displayed session)`,
       `CPU: ${gigabytes(update.cpu.free)} available of ${gigabytes(update.cpu.total)}`,
       ...gpus.map(
         (gpu, index) =>
@@ -718,6 +726,172 @@ declare function acquireVsCodeApi(): {
     ].join("\n");
     systemMemory.hidden = false;
   };
+  const assignmentDialog = element("assignment-dialog", HTMLElement);
+  const assignmentForm = element("assignment-form", HTMLFormElement);
+  const assignmentTitle = element("assignment-title", HTMLElement);
+  const assignmentWorker = element("assignment-worker", HTMLSelectElement);
+  const assignmentWorkerMachine = element(
+    "assignment-worker-machine",
+    HTMLSelectElement,
+  );
+  const assignmentHarness = element(
+    "assignment-harness-machine",
+    HTMLSelectElement,
+  );
+  const assignmentSummary = element("assignment-summary", HTMLElement);
+  let assignmentRequest:
+    { requestId: string; repositoryId: string; backend?: string } | undefined;
+  const assignmentModelKinds: Record<string, string> = {
+    copilot: "Copilot",
+    file: "GenAI files",
+    checkpoint: "Transformers checkpoint",
+    "model-id": "Hugging Face",
+    foundry: "Foundry",
+  };
+  const describeWorker = (
+    worker: import("./execution").WorkerConfiguration,
+  ): string =>
+    worker.backend === "copilot"
+      ? `Copilot agent · model ${worker.model.source || "CLI default"}`
+      : `${assignmentModelKinds[worker.model.kind] ?? worker.model.kind}: ${worker.model.source} · ${worker.provider === "cuda" ? `CUDA device ${worker.deviceId}` : "CPU"}`;
+  const describeMachine = (
+    machine: import("./execution").MachineConfiguration,
+  ): string =>
+    `${machine.name} (${machine.command ? "remote" : "this computer"})`;
+  const repositoryFolder = (id: string): string =>
+    id.split(/[\\/]/).filter(Boolean).at(-1) ?? id;
+  const updateAssignmentDialog = (): void => {
+    const execution = settingsState?.execution;
+    const worker = execution?.workers.find(
+      (entry) => entry.id === assignmentWorker.value,
+    );
+    const copilot = worker?.backend === "copilot";
+    // Copilot always runs on the harness machine.
+    if (copilot) assignmentWorkerMachine.value = assignmentHarness.value;
+    assignmentWorkerMachine.disabled = copilot;
+    const machine = (id: string) =>
+      execution?.machines.find((entry) => entry.id === id);
+    const workerMachine = machine(assignmentWorkerMachine.value);
+    const harness = machine(assignmentHarness.value);
+    element("assignment-worker-hint", HTMLElement).textContent = worker
+      ? describeWorker(worker)
+      : "";
+    element("assignment-worker-machine-hint", HTMLElement).textContent = copilot
+      ? "Copilot runs on the harness machine."
+      : workerMachine
+        ? `Model files in ${workerMachine.modelsPath}${workerMachine.command ? `; native worker ${workerMachine.workerPath} (built on first use if missing)` : ""}.`
+        : "";
+    const folder = assignmentRequest
+      ? repositoryFolder(assignmentRequest.repositoryId)
+      : "";
+    const repositoryPath = harness
+      ? `${harness.repositoriesPath.replace(/[\\/]+$/, "")}/${folder}`
+      : "";
+    element("assignment-harness-machine-hint", HTMLElement).textContent =
+      harness ? `Repository: ${repositoryPath}` : "";
+    assignmentSummary.textContent =
+      worker && workerMachine && harness
+        ? [
+            `Agent and model: ${worker.name} (${describeWorker(worker)})`,
+            `Model runs on: ${describeMachine(workerMachine)}`,
+            `Files and commands on: ${describeMachine(harness)} in ${repositoryPath}`,
+          ].join("\n")
+        : "";
+  };
+  const closeAssignmentDialog = (choice?: {
+    workerId: string;
+    workerMachineId: string;
+    executionMachineId: string;
+  }): void => {
+    if (!assignmentRequest) return;
+    vscode.postMessage({
+      type: "assignment-choice",
+      requestId: assignmentRequest.requestId,
+      ...(choice ? { choice } : {}),
+    });
+    assignmentRequest = undefined;
+    assignmentDialog.hidden = true;
+  };
+  const openAssignmentDialog = (request: {
+    requestId: string;
+    repositoryId: string;
+    backend?: string;
+  }): void => {
+    closeAssignmentDialog();
+    const execution = settingsState?.execution;
+    const workers =
+      execution?.workers.filter(
+        (worker) => !request.backend || worker.backend === request.backend,
+      ) ?? [];
+    assignmentRequest = request;
+    if (!execution || !workers.length) {
+      closeAssignmentDialog();
+      return;
+    }
+    assignmentTitle.textContent = `New ${request.backend === "local" ? "local model " : request.backend === "copilot" ? "Copilot " : ""}session for ${repositoryFolder(request.repositoryId)}`;
+    const fill = (
+      select: HTMLSelectElement,
+      entries: { value: string; label: string }[],
+    ): void => {
+      select.replaceChildren(
+        ...entries.map(({ value, label }) => {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = label;
+          return option;
+        }),
+      );
+    };
+    fill(
+      assignmentWorker,
+      workers.map((worker) => ({
+        value: worker.id,
+        label: `${worker.name} — ${describeWorker(worker)}`,
+      })),
+    );
+    const machines = execution.machines.map((machine) => ({
+      value: machine.id,
+      label: describeMachine(machine),
+    }));
+    fill(assignmentWorkerMachine, machines);
+    fill(assignmentHarness, machines);
+    const selectWorker = (): void => {
+      const worker = workers.find(
+        (entry) => entry.id === assignmentWorker.value,
+      );
+      if (worker) {
+        assignmentWorkerMachine.value = worker.machineId;
+        if (worker.backend === "copilot")
+          assignmentHarness.value = worker.machineId;
+      }
+      updateAssignmentDialog();
+    };
+    assignmentHarness.value =
+      execution.machines.find((machine) => !machine.command)?.id ??
+      execution.machines[0]?.id ??
+      "";
+    selectWorker();
+    assignmentWorker.onchange = selectWorker;
+    assignmentDialog.hidden = false;
+    assignmentWorker.focus();
+  };
+  assignmentWorkerMachine.addEventListener("change", updateAssignmentDialog);
+  assignmentHarness.addEventListener("change", updateAssignmentDialog);
+  assignmentForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    closeAssignmentDialog({
+      workerId: assignmentWorker.value,
+      workerMachineId: assignmentWorkerMachine.value,
+      executionMachineId: assignmentHarness.value,
+    });
+  });
+  element("assignment-cancel", HTMLButtonElement).addEventListener(
+    "click",
+    () => closeAssignmentDialog(),
+  );
+  assignmentDialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeAssignmentDialog();
+  });
   let copilotModelsRequested = false;
   const showSettings = (): void => {
     if (copilotModelsRequested) return;
@@ -3646,6 +3820,12 @@ declare function acquireVsCodeApi(): {
             | { error: string }
           ))
         | {
+            type: "choose-assignment";
+            requestId: string;
+            repositoryId: string;
+            backend?: "copilot" | "local";
+          }
+        | {
             type: "execution-configuration-saved";
             requestId: string;
             configuration: ExecutionConfiguration;
@@ -3771,6 +3951,8 @@ declare function acquireVsCodeApi(): {
         localModels = event.data.models;
         renderLocalModels();
         updateControls();
+      } else if (event.data.type === "choose-assignment") {
+        openAssignmentDialog(event.data);
       } else if (event.data.type === "memory") {
         renderMemory(event.data);
       } else if (event.data.type === "settings-state") {

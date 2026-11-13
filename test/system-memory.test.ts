@@ -4,7 +4,10 @@ import {
   cpuMemory,
   MemoryMonitor,
   parseNvidiaMemory,
+  parseRemoteMemory,
+  remoteMemory,
 } from "../src/system-memory";
+import { join } from "node:path";
 
 const MiB = 1024 ** 2;
 
@@ -40,3 +43,27 @@ test("a missing nvidia-smi reports CPU memory only and is not spawned again", as
   assert.equal(first.cuda, undefined);
   assert.equal((await monitor.sample()).cuda, undefined);
 });
+
+test("remote memory reports available RAM and optional GPUs", async () => {
+  assert.deepEqual(parseRemoteMemory("1024,4096\n7959, 8188\n"), {
+    cpu: { free: 1024, total: 4096 },
+    cuda: [{ free: 7959 * MiB, total: 8188 * MiB }],
+  });
+  assert.deepEqual(parseRemoteMemory("1024,4096\n"), {
+    cpu: { free: 1024, total: 4096 },
+  });
+  assert.throws(() => parseRemoteMemory(",\n"), /invalid memory/);
+});
+
+test(
+  "remote memory is sampled through the connection command",
+  { skip: process.platform !== "linux" },
+  async () => {
+    const update = await remoteMemory({
+      name: "vm",
+      command: `"${process.execPath}" "${join(__dirname, "fixtures", "remote-shell.js")}"`,
+    });
+    assert.equal(update.machine, "vm");
+    assert.ok(update.cpu.total > 0 && update.cpu.free <= update.cpu.total);
+  },
+);

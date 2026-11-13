@@ -272,6 +272,16 @@ export type ApplicationMessage =
     }
   | { type: "foundry-models"; device: FoundryDevice }
   | { type: "worker-foundry-models"; requestId: string; device: "cpu" | "gpu" }
+  /** Reply to the host's session dialog; no choice means it was cancelled. */
+  | {
+      type: "assignment-choice";
+      requestId: string;
+      choice?: {
+        workerId: string;
+        workerMachineId: string;
+        executionMachineId: string;
+      };
+    }
   | { type: "foundry-download"; id: string }
   | { type: "local-device"; provider: LocalProvider; deviceId: number }
   | { type: "stop-local-worker"; hostId: string }
@@ -408,6 +418,35 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
     )
       throw new Error("Invalid Foundry catalogue request.");
     return { type: "worker-foundry-models", requestId, device };
+  }
+  if (value.type === "assignment-choice") {
+    const requestId = "requestId" in value ? value.requestId : undefined;
+    const choice = "choice" in value ? value.choice : undefined;
+    const ids =
+      choice && typeof choice === "object"
+        ? (["workerId", "workerMachineId", "executionMachineId"] as const).map(
+            (key) => (choice as Record<string, unknown>)[key],
+          )
+        : [];
+    if (
+      typeof requestId !== "string" ||
+      !/^[\w-]{1,100}$/.test(requestId) ||
+      (choice !== undefined &&
+        (ids.length !== 3 ||
+          ids.some((id) => typeof id !== "string" || !id || id.length > 200)))
+    )
+      throw new Error("Invalid session assignment choice.");
+    if (choice === undefined) return { type: "assignment-choice", requestId };
+    const [workerId, workerMachineId, executionMachineId] = ids as [
+      string,
+      string,
+      string,
+    ];
+    return {
+      type: "assignment-choice",
+      requestId,
+      choice: { workerId, workerMachineId, executionMachineId },
+    };
   }
   if (value.type === "harness-settings") {
     if (
@@ -1605,6 +1644,12 @@ export class AgentApplication {
     if (assignment) this.setAssignment(slot, assignment);
     this.activeId = id;
     return this.newSession(id);
+  }
+
+  /** Assignment of the session displayed in the active repository. */
+  activeAssignment(): SessionAssignment | undefined {
+    const main = this.activeId ? this.sessions.get(this.activeId) : undefined;
+    return main ? this.displayed(main).assignment : undefined;
   }
 
   selectSession(id: string, view: SessionView): void {

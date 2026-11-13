@@ -56,7 +56,12 @@ import {
   LocalModelHost,
   type LocalPlacement,
 } from "./local-model-host";
-import { MemoryMonitor } from "./system-memory";
+import {
+  MemoryMonitor,
+  remoteMemory,
+  type MemoryUpdate,
+} from "./system-memory";
+import { ensureRemoteWorker } from "./remote-worker";
 import {
   inspectRemoteModel,
   parseRemoteMachines,
@@ -74,7 +79,6 @@ import {
   parseExecutionConfiguration,
   type ExecutionConfiguration,
   type MachineConfiguration,
-  type WorkerConfiguration,
   type SessionAssignment,
 } from "./execution";
 import { prepareRemoteModel, uploadRemoteModel } from "./remote-model-source";
@@ -221,80 +225,51 @@ export function activate(context: vscode.ExtensionContext): void {
             repositoriesPath: machine.repositoriesPath,
           }
         : undefined;
+    const assignmentRequests = new Map<
+      string,
+      (
+        choice:
+          | {
+              workerId: string;
+              workerMachineId: string;
+              executionMachineId: string;
+            }
+          | undefined,
+      ) => void
+    >();
+    /** Asks the webview's session dialog for a worker, worker machine and harness machine. */
     const chooseAssignment = async (
       backend: "copilot" | "local" | undefined,
       repositoryId: string,
     ): Promise<SessionAssignment | undefined> => {
       const config = executionConfiguration();
-      const workers = config.workers.filter(
-        (worker) => !backend || worker.backend === backend,
-      );
-      if (!workers.length)
+      if (
+        !config.workers.some((worker) => !backend || worker.backend === backend)
+      )
         throw new Error(
           `Add a ${backend === "local" ? "local model " : backend === "copilot" ? "Copilot " : ""}worker in Settings > Workers before opening a session.`,
         );
-      const repositoryPath = application
-        .getState()
-        .repositories.find((entry) => entry.id === repositoryId)?.path;
-      const where = (machine: MachineConfiguration): string =>
-        machine.command
-          ? `${machine.name} (remote)`
-          : `${machine.name} (this computer)`;
-      const machineOf = (id: string): string => {
-        const machine = config.machines.find((entry) => entry.id === id);
-        return machine ? where(machine) : id;
-      };
-      const kinds: Record<WorkerConfiguration["model"]["kind"], string> = {
-        copilot: "Copilot model",
-        file: "GenAI files",
-        checkpoint: "Transformers checkpoint",
-        "model-id": "Hugging Face",
-        foundry: "Foundry",
-      };
-      type Choice = vscode.QuickPickItem & {
-        worker?: WorkerConfiguration;
-        machine?: MachineConfiguration;
-      };
-      const choices: Choice[] = workers.flatMap((worker) => [
-        {
-          label:
-            worker.backend === "copilot"
-              ? `${worker.name} - Copilot · ${worker.model.source || "CLI default model"}`
-              : `${worker.name} - ${kinds[worker.model.kind]}: ${worker.model.source} · ${worker.provider === "cuda" ? `CUDA ${worker.deviceId}` : "CPU"} on ${machineOf(worker.machineId)}`,
-          kind: vscode.QuickPickItemKind.Separator,
-        },
-        ...config.machines
-          .filter(
-            (machine) =>
-              worker.backend !== "copilot" || machine.id === worker.machineId,
-          )
-          .map((machine) => ({
-            label: `${worker.name}  →  ${where(machine)}`,
-            description:
-              worker.backend === "copilot"
-                ? "Copilot works on this machine"
-                : machine.id === worker.machineId
-                  ? "model and files on the same machine"
-                  : `model on ${machineOf(worker.machineId)}`,
-            detail: `Files edited and commands run on ${where(machine)}: ${
-              repositoryPath
-                ? machineRepositoryPath(machine, repositoryPath)
-                : machine.repositoriesPath
-            }`,
-            worker,
-            machine,
-          })),
-      ]);
-      const picked = await vscode.window.showQuickPick(choices, {
-        title: "New session: agent/model  →  machine for files and commands",
-        placeHolder:
-          "Each entry pairs an agent and its model (Settings > Workers) with the machine where the repository is edited and commands run",
-        matchOnDescription: true,
-        matchOnDetail: true,
-        ignoreFocusOut: true,
+      if (!panel) return undefined;
+      const requestId = randomUUID();
+      const choice = await new Promise<
+        Parameters<NonNullable<ReturnType<typeof assignmentRequests.get>>>[0]
+      >((resolve) => {
+        assignmentRequests.set(requestId, resolve);
+        void panel?.webview.postMessage({
+          type: "choose-assignment",
+          requestId,
+          repositoryId,
+          ...(backend ? { backend } : {}),
+        });
       });
-      if (!picked?.worker || !picked.machine) return undefined;
-      return assignSession(config, picked.worker.id, picked.machine.id);
+      assignmentRequests.delete(requestId);
+      if (!choice) return undefined;
+      return assignSession(
+        executionConfiguration(),
+        choice.workerId,
+        choice.executionMachineId,
+        choice.workerMachineId,
+      );
     };
     const copilotOptions = (
       repositoryPath: string,
@@ -574,9 +549,34 @@ export function activate(context: vscode.ExtensionContext): void {
     closeActiveApplication = close;
     const currentPanel = panel;
     const memoryMonitor = new MemoryMonitor();
+    const remoteMemorySamples = new Map<
+      string,
+      { at: number; sample: Promise<MemoryUpdate> }
+    >();
+    const sampleMemory = (): Promise<MemoryUpdate> => {
+      const assignment = application.activeAssignment();
+      const machine = assignment?.workerMachine;
+      const deviceId =
+        assignment?.worker.provider === "cuda"
+          ? assignment.worker.deviceId
+          : undefined;
+      const withDevice = (update: MemoryUpdate): MemoryUpdate =>
+        deviceId === undefined ? update : { ...update, deviceId };
+      if (!machine?.command) return memoryMonitor.sample().then(withDevice);
+      // Each sample opens a connection, so remote machines are sampled less often.
+      const cached = remoteMemorySamples.get(machine.command);
+      if (cached && Date.now() - cached.at < 30_000)
+        return cached.sample.then(withDevice);
+      const sample = remoteMemory(
+        { command: machine.command, name: machine.name },
+        lifetime.signal,
+      );
+      remoteMemorySamples.set(machine.command, { at: Date.now(), sample });
+      return sample.then(withDevice);
+    };
     const publishMemory = (): void => {
       if (!panel?.visible || stopping) return;
-      void memoryMonitor.sample().then(
+      void sampleMemory().then(
         (update) => panel && void panel.webview.postMessage(update),
         () => undefined,
       );
@@ -782,14 +782,52 @@ export function activate(context: vscode.ExtensionContext): void {
       args: string[];
       workerId?: string;
     }
+    const remoteWorkers = new Map<string, Promise<string>>();
     const workerLaunch = async (
       remote: RemoteMachine | undefined,
     ): Promise<WorkerLaunch> => {
       if (!remote)
         return { machine: "", executable: await prepareWorker(), args: [] };
+      const key = JSON.stringify([remote.command, remote.workerPath]);
+      let executable = remoteWorkers.get(key);
+      if (!executable) {
+        executable = Promise.resolve(
+          vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: `Native worker on ${remote.name}`,
+              cancellable: true,
+            },
+            async (progress, token) => {
+              const controller = new AbortController();
+              const subscription = token.onCancellationRequested(() =>
+                controller.abort(),
+              );
+              try {
+                progress.report({ message: "looking for the worker..." });
+                return await ensureRemoteWorker(remote, {
+                  nativeDirectory: join(context.extensionPath, "native"),
+                  signal: AbortSignal.any([controller.signal, lifetime.signal]),
+                  onInstall: () =>
+                    progress.report({
+                      message:
+                        "building it on the remote machine (first use, several minutes)...",
+                    }),
+                });
+              } finally {
+                subscription.dispose();
+              }
+            },
+          ),
+        );
+        remoteWorkers.set(key, executable);
+        executable.catch(() => {
+          if (remoteWorkers.get(key) === executable) remoteWorkers.delete(key);
+        });
+      }
       return {
         machine: remote.name,
-        ...remoteInvocation(remote, [remote.workerPath]),
+        ...remoteInvocation(remote, [await executable]),
       };
     };
     const startWorker = (
@@ -1869,8 +1907,12 @@ export function activate(context: vscode.ExtensionContext): void {
               );
               break;
             }
+            case "assignment-choice":
+              assignmentRequests.get(message.requestId)?.(message.choice);
+              break;
             case "select-session":
               application.selectSession(message.id, message.view);
+              publishMemory();
               break;
             case "add-session": {
               const assignment = await chooseAssignment(undefined, message.id);
@@ -2112,6 +2154,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     panel.onDidDispose(() => {
       panel = undefined;
+      for (const resolve of assignmentRequests.values()) resolve(undefined);
       clearInterval(memoryTimer);
       visibilitySubscription.dispose();
       messageSubscription.dispose();

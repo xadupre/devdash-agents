@@ -500,6 +500,22 @@ export function renderApplication(resources: {
   </aside>
 </main>
 <div id="repository-menu" role="menu" aria-label="Repository session actions" hidden></div>
+<div id="assignment-dialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="assignment-title" hidden>
+  <form id="assignment-form" class="modal-body">
+    <h2 id="assignment-title">New session</h2>
+    <label for="assignment-worker">1. Worker: agent and model</label>
+    <select id="assignment-worker" required></select>
+    <p id="assignment-worker-hint" class="repository-hint"></p>
+    <label for="assignment-worker-machine">2. Worker machine: runs the model (its CPU/GPU memory is shown under the prompt)</label>
+    <select id="assignment-worker-machine" required></select>
+    <p id="assignment-worker-machine-hint" class="repository-hint"></p>
+    <label for="assignment-harness-machine">3. Harness machine: holds the repository, edits files and runs commands</label>
+    <select id="assignment-harness-machine" required></select>
+    <p id="assignment-harness-machine-hint" class="repository-hint"></p>
+    <p id="assignment-summary" role="status"></p>
+    <div class="modal-actions"><button id="assignment-create" type="submit">Create session</button><button id="assignment-cancel" type="button">Cancel</button></div>
+  </form>
+</div>
 <script nonce="${nonce}" src="${escape(resources.scriptUri)}"></script>
 </body>
 </html>`;

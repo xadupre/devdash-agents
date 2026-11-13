@@ -123,15 +123,50 @@ test("machines allow repeated connections and workers bind one model and device"
         parseApplicationMessage({ type: "worker-foundry-models", ...invalid }),
       /Foundry catalogue request/,
     );
+  const choice = {
+    workerId: "inference",
+    workerMachineId: "gpu",
+    executionMachineId: "local",
+  };
+  assert.deepEqual(
+    parseApplicationMessage({
+      type: "assignment-choice",
+      requestId: "r-1",
+      choice,
+    }),
+    { type: "assignment-choice", requestId: "r-1", choice },
+  );
+  assert.deepEqual(
+    parseApplicationMessage({ type: "assignment-choice", requestId: "r-1" }),
+    { type: "assignment-choice", requestId: "r-1" },
+  );
+  assert.throws(
+    () =>
+      parseApplicationMessage({
+        type: "assignment-choice",
+        requestId: "r-1",
+        choice: { ...choice, workerMachineId: "" },
+      }),
+    /session assignment choice/,
+  );
   const assigned = assignSession(config, "inference", "local");
   assert.equal(assigned.workerMachine.id, "gpu");
   assert.equal(assigned.executionMachine.id, "local");
   assert.equal(assigned.worker.deviceId, 1);
   assigned.worker.model.source = "another/model";
   assert.equal(config.workers[0]!.model.source, "Qwen/Qwen3-0.6B");
+  const moved = assignSession(config, "inference", "local", "local");
+  assert.equal(moved.workerMachine.id, "local");
+  assert.equal(moved.worker.machineId, "local");
+  assert.equal(config.workers[0]!.machineId, "gpu");
+  assert.deepEqual(parseSessionAssignment(moved), moved);
+  // Copilot follows the harness machine whatever worker machine is requested.
+  const copilot = assignSession(config, "copilot", "gpu", "local");
+  assert.equal(copilot.workerMachine.id, "gpu");
+  assert.equal(copilot.worker.machineId, "gpu");
   assert.throws(
-    () => assignSession(config, "copilot", "gpu"),
-    /Copilot must run/,
+    () => assignSession(config, "inference", "local", "missing"),
+    /worker machine/,
   );
   assert.throws(
     () => assignSession(config, "missing", "local"),

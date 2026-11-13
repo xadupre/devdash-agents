@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { freemem, totalmem } from "node:os";
 import { promisify } from "node:util";
+import { remoteError, runRemoteScript, type RemoteMachine } from "./remote";
 
 export interface MemoryAmount {
   free: number;
@@ -12,6 +13,10 @@ export interface MemoryUpdate {
   cpu: MemoryAmount;
   /** One entry per NVIDIA GPU; absent when nvidia-smi is unavailable. */
   cuda?: MemoryAmount[];
+  /** Machine sampled, when it is not this computer. */
+  machine?: string;
+  /** CUDA device used by the displayed session's worker. */
+  deviceId?: number;
 }
 
 const MiB = 1024 ** 2;
@@ -82,4 +87,45 @@ export class MemoryMonitor {
     }
     return update;
   }
+}
+
+const REMOTE_MEMORY = `awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{print a*1024 "," t*1024}' /proc/meminfo || exit 2
+nvidia-smi --query-gpu=memory.free,memory.total --format=csv,noheader,nounits 2>/dev/null || true
+`;
+
+/** Parses REMOTE_MEMORY: "available,total" bytes, then optional nvidia-smi lines. */
+export function parseRemoteMemory(stdout: string): Omit<MemoryUpdate, "type"> {
+  const [first = "", ...rest] = stdout.trim().split(/\r?\n/);
+  const [free, total] = first.split(",").map(Number);
+  if (
+    !Number.isSafeInteger(free) ||
+    !Number.isSafeInteger(total) ||
+    total! <= 0 ||
+    free! < 0
+  )
+    throw new Error("The remote machine returned invalid memory values.");
+  const gpus = rest.join("\n").trim();
+  return {
+    cpu: { free: Math.min(free!, total!), total: total! },
+    ...(gpus ? { cuda: parseNvidiaMemory(gpus) } : {}),
+  };
+}
+
+/** Samples a remote machine's available RAM and NVIDIA memory over its connection command. */
+export async function remoteMemory(
+  machine: Pick<RemoteMachine, "command" | "name">,
+  signal?: AbortSignal,
+): Promise<MemoryUpdate> {
+  const result = await runRemoteScript(machine, REMOTE_MEMORY, [], {
+    signal,
+    timeoutMs: 30_000,
+    maxOutput: 65536,
+  });
+  if (!result.completed || result.code !== 0)
+    throw remoteError(result, `Cannot read the memory of ${machine.name}`);
+  return {
+    type: "memory",
+    ...parseRemoteMemory(result.stdout.toString("utf8")),
+    machine: machine.name,
+  };
 }

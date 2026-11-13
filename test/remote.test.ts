@@ -22,6 +22,7 @@ import {
   splitCommandLine,
   type RemoteMachine,
 } from "../src/remote";
+import { ensureRemoteWorker } from "../src/remote-worker";
 
 const posix = process.platform !== "win32";
 const connection = `"${process.execPath}" "${join(__dirname, "fixtures", "remote-shell.js")}"`;
@@ -311,5 +312,57 @@ test(
     assert.deepEqual(await local.discover(), [
       { provider: "cpu", deviceId: 0, name: "CPU" },
     ]);
+  },
+);
+
+test(
+  "remote workers are found, or built once from the shipped sources",
+  { skip: !posix },
+  async (t) => {
+    const home = await directory(t);
+    const native = join(await directory(t), "native");
+    await mkdir(join(native, "src"), { recursive: true });
+    await writeFile(join(native, "CMakeLists.txt"), "");
+    await writeFile(join(native, "src", "main.cpp"), "");
+    const setup = join(native, "setup-worker.sh");
+    await writeFile(
+      setup,
+      'root=$(cd "$(dirname "$0")/.." && pwd); mkdir -p "$root/build/native"; printf "#!/bin/sh\\n" > "$root/build/native/devdash-genai-worker"; chmod +x "$root/build/native/devdash-genai-worker"\n',
+    );
+    const previous = process.env.HOME;
+    process.env.HOME = home;
+    t.after(() => {
+      process.env.HOME = previous;
+    });
+    const remote = { name: "vm", command: connection };
+
+    await assert.rejects(
+      ensureRemoteWorker(
+        { ...remote, workerPath: "/opt/missing-worker" },
+        { nativeDirectory: native },
+      ),
+      /Worker executable not found on this machine: \/opt\/missing-worker/,
+    );
+
+    let installs = 0;
+    const options = {
+      nativeDirectory: native,
+      onInstall: () => installs++,
+    };
+    const worker = { ...remote, workerPath: "devdash-genai-worker" };
+    const built = await ensureRemoteWorker(worker, options);
+    assert.match(
+      built,
+      /\/\.cache\/devdash-agents\/engine\/[0-9a-f]{16}\/build\/native\/devdash-genai-worker$/,
+    );
+    assert.ok(built.startsWith(home));
+    assert.equal(await ensureRemoteWorker(worker, options), built);
+    assert.equal(installs, 1);
+
+    await writeFile(setup, "echo 'cmake: not found' >&2; exit 1\n");
+    await assert.rejects(
+      ensureRemoteWorker(worker, options),
+      /Building the worker failed \(log: .*setup\.log\): cmake: not found/,
+    );
   },
 );

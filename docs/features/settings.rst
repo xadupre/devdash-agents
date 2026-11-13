@@ -23,7 +23,13 @@ CLI executables.
 Other entries use a noninteractive connection command such as ``ssh user@host``
 or ``az ssh vm ...`` accepting ``--`` followed by a quoted remote command.
 Remote hosts require a POSIX shell and GNU utilities; local hosts also support
-Windows. Machine identifiers must be unique, but multiple entries may connect
+Windows. When a remote machine's native worker executable is the default
+``devdash-genai-worker`` and is not on its ``PATH``, the first local model
+session on that machine builds it from the sources shipped with the extension
+into ``~/.cache/devdash-agents/engine/<version>`` (Linux x64; requires ``bash``,
+``cmake``, a C++ compiler, ``curl``, ``sha256sum``, ``tar`` and ``flock``;
+several minutes, with a progress notification). A failed build reports the
+last lines of its log. Any other executable must already exist on the machine. Machine identifiers must be unique, but multiple entries may connect
 to the same physical host and use different directories.
 
 Save operations finish one at a time; the form reports success or any error
@@ -32,10 +38,10 @@ next to the machine or worker settings.
 Each worker chooses one machine, exactly one model source, and **CPU** or
 **CUDA** with a device index. Model sources are:
 
-* **Copilot agent**: uses the authenticated Copilot CLI on that machine. To
-  use Copilot on a remote machine, install and sign in to the Copilot CLI
-  there, save the machine, then select **Add Copilot worker on this machine**.
-  Copilot sessions edit files and run commands on the worker's machine.
+* **Copilot agent**: uses the authenticated Copilot CLI of the session's
+  harness machine. One Copilot worker can serve every machine: install and sign
+  in to the Copilot CLI on a remote machine, save it, then choose it as the
+  harness machine in the session dialog.
 * **ONNX/GenAI file or directory**: files must have their complete GenAI
   configuration, weights and tokenizer in the same model directory.
 * **Transformers checkpoint file or directory**: must have ``config.json``,
@@ -54,10 +60,10 @@ Foundry workers the package is staged on the extension host, then streamed to
 remote storage using ``tar`` without buffering the model in memory. An isolated
 ONNX weights file without configuration, and GGUF models, are not supported.
 
-**Add** in the session toolbar selects a worker, then the machine on which
-repository files and commands execute. A native inference worker may run on
-another machine. Copilot CLI must run directly on the selected execution
-machine, where it must already be installed and authenticated. Repositories
+**Add** in the session toolbar selects a worker, the worker machine running its
+model, and the harness machine on which repository files and commands execute
+(see :doc:`sessions`). Copilot CLI runs directly on the harness machine,
+where it must already be installed and authenticated. Repositories
 must already exist at ``<repositories directory>/<repository folder name>``;
 the application does not clone or synchronize them.
 

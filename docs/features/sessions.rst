@@ -5,11 +5,15 @@ Every repository can have multiple Copilot and local sessions open at the same
 time. Each has its own transcript and draft; switching sessions never merges model
 context. Sessions start lazily and continue independently while another session
 is displayed. Selecting a repository only displays its current view and draft;
-use **Add** to open an independent session. A single list shows every valid
-pair *agent and model → machine for files and commands*, grouped by worker.
-Each group header names the worker's model, device and the machine running it;
-each entry shows the repository path on the machine where files are edited and
-commands run. Copilot workers only pair with their own machine.
+use **Add** to open an independent session. Its dialog has three choices:
+
+1. **Worker**: the agent and its model, with the model source and CPU/CUDA device.
+2. **Worker machine**: where the model runs; it defaults to the worker's machine
+   and can be any configured machine. Copilot always runs on the harness machine.
+3. **Harness machine**: holds the repository, edits files and runs commands; its
+   repository path is shown.
+
+A summary repeats the three choices before **Create session**.
 The **Session** dropdown lists all open sessions in the selected repository.
 **Close** stops only the selected session, leaving its transcript available.
 **Resume** lists the repository's saved Copilot sessions,
@@ -130,6 +134,10 @@ Use **Cancel context reduction** in the Sessions panel to interrupt either
 action. Summaries can lose details; the original transcript remains available
 for reference.
 
+The free memory under the prompt is the worker machine's memory for the displayed
+session: available RAM and, for a CUDA worker, its device (hover for every GPU).
+A remote worker machine is sampled at most every 30 seconds over its connection
+command. Without a session, it is this computer's memory.
 If free CPU or CUDA memory drops below 300 MiB, the composer and Sessions panel
 show a warning to offload a model. KV byte counts are estimates based on model
 dimensions and cache precision. ONNX Runtime's memory arena and other runtime

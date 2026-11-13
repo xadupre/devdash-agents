@@ -202,20 +202,28 @@ export function assignSession(
   configuration: ExecutionConfiguration,
   workerId: string,
   executionMachineId: string,
+  workerMachineId?: string,
 ): SessionAssignment {
   const { machines, workers } = parseExecutionConfiguration(configuration);
-  const worker = workers.find((entry) => entry.id === workerId);
+  const configured = workers.find((entry) => entry.id === workerId);
   const executionMachine = machines.find(
     (entry) => entry.id === executionMachineId,
   );
-  const workerMachine = machines.find(
-    (entry) => entry.id === worker?.machineId,
-  );
-  if (!worker || !workerMachine || !executionMachine)
-    throw new Error("Choose a configured worker and execution machine.");
-  if (worker.backend === "copilot" && workerMachine.id !== executionMachine.id)
-    throw new Error("Copilot must run on the session's execution machine.");
-  return { worker, workerMachine, executionMachine };
+  // Copilot always runs where the session's files and commands are.
+  const machineId =
+    configured?.backend === "copilot"
+      ? executionMachineId
+      : (workerMachineId ?? configured?.machineId);
+  const workerMachine = machines.find((entry) => entry.id === machineId);
+  if (!configured || !workerMachine || !executionMachine)
+    throw new Error(
+      "Choose a configured worker, worker machine and harness machine.",
+    );
+  return {
+    worker: { ...configured, machineId: workerMachine.id },
+    workerMachine,
+    executionMachine,
+  };
 }
 
 export function parseSessionAssignment(value: unknown): SessionAssignment {

@@ -779,6 +779,22 @@ test("the composer shows the active session model and free CPU/CUDA memory", asy
     "Free: CPU 12.3 GB · CUDA 0 7.8 GB · CUDA 1 20.0 GB",
   );
   assert.match(memory.title, /CUDA 1: 20\.0 GB free of 24\.0 GB/);
+  send({
+    type: "memory",
+    machine: "H200-101",
+    deviceId: 1,
+    cpu: { free: 12.34 * GiB, total: 32 * GiB },
+    cuda: [
+      { free: 0.1 * GiB, total: 8 * GiB },
+      { free: 20 * GiB, total: 24 * GiB },
+    ],
+  });
+  assert.equal(
+    memory.textContent,
+    "H200-101 free: CPU 12.3 GB · CUDA 1 20.0 GB",
+  );
+  assert.match(memory.title, /Memory of H200-101/);
+  assert.match(memory.title, /CUDA 0: 0\.1 GB free/);
   send({ type: "memory", cpu: { free: 299 * 1024 ** 2, total: 32 * GiB } });
   assert.match(memory.textContent ?? "", /Low memory: offload a model/);
   assert.equal(memory.classList.contains("memory-warning"), true);
@@ -5506,4 +5522,110 @@ test("the worker table lists running workers and stops idle ones on demand", asy
     document.querySelector<HTMLElement>("#worker-table-empty")!.hidden,
     false,
   );
+});
+
+test("the session dialog chooses the worker, its machine and the harness machine", async (t) => {
+  const { dom, document, posted } = await setup(t);
+  const local = {
+    id: "local",
+    name: "Local",
+    command: "",
+    repositoriesPath: "/projects",
+    modelsPath: "/models",
+    workerPath: "worker",
+    cliPath: "copilot",
+  };
+  const remote = {
+    ...local,
+    id: "h200",
+    name: "H200",
+    command: "ssh h200",
+    repositoriesPath: "/data/repos",
+    modelsPath: "/data/models",
+  };
+  const copilot = {
+    id: "copilot-local",
+    name: "Copilot",
+    machineId: "local",
+    backend: "copilot" as const,
+    model: { kind: "copilot" as const, source: "" },
+    provider: "cpu" as const,
+    deviceId: 0,
+  };
+  const qwen = {
+    ...copilot,
+    id: "qwen",
+    name: "Qwen",
+    machineId: "h200",
+    backend: "local" as const,
+    model: { kind: "foundry" as const, source: "qwen-cuda" },
+    provider: "cuda" as const,
+    deviceId: 7,
+  };
+  settingsSender(dom)({
+    execution: { machines: [local, remote], workers: [copilot, qwen] },
+  });
+  const send = (data: unknown) =>
+    dom.window.dispatchEvent(new dom.window.MessageEvent("message", { data }));
+  const dialog = document.querySelector<HTMLElement>("#assignment-dialog")!;
+  const worker =
+    document.querySelector<HTMLSelectElement>("#assignment-worker")!;
+  const workerMachine = document.querySelector<HTMLSelectElement>(
+    "#assignment-worker-machine",
+  )!;
+  const harness = document.querySelector<HTMLSelectElement>(
+    "#assignment-harness-machine",
+  )!;
+  const summary = document.querySelector<HTMLElement>("#assignment-summary")!;
+  assert.equal(dialog.hidden, true);
+  send({
+    type: "choose-assignment",
+    requestId: "r1",
+    repositoryId: "/src/alpha",
+  });
+  assert.equal(dialog.hidden, false);
+  assert.equal(worker.options.length, 2);
+  // Copilot follows the harness machine.
+  assert.equal(workerMachine.disabled, true);
+  harness.value = "h200";
+  harness.dispatchEvent(new dom.window.Event("change"));
+  assert.equal(workerMachine.value, "h200");
+  worker.value = "qwen";
+  worker.dispatchEvent(new dom.window.Event("change"));
+  assert.equal(workerMachine.disabled, false);
+  assert.equal(workerMachine.value, "h200");
+  harness.value = "local";
+  harness.dispatchEvent(new dom.window.Event("change"));
+  assert.equal(
+    summary.textContent,
+    [
+      "Agent and model: Qwen (Foundry: qwen-cuda · CUDA device 7)",
+      "Model runs on: H200 (remote)",
+      "Files and commands on: Local (this computer) in /projects/alpha",
+    ].join("\n"),
+  );
+  posted.length = 0;
+  document.querySelector<HTMLFormElement>("#assignment-form")!.requestSubmit();
+  assert.deepEqual(posted, [
+    {
+      type: "assignment-choice",
+      requestId: "r1",
+      choice: {
+        workerId: "qwen",
+        workerMachineId: "h200",
+        executionMachineId: "local",
+      },
+    },
+  ]);
+  assert.equal(dialog.hidden, true);
+  send({
+    type: "choose-assignment",
+    requestId: "r2",
+    repositoryId: "/src/alpha",
+    backend: "local",
+  });
+  assert.equal(worker.options.length, 1);
+  posted.length = 0;
+  document.querySelector<HTMLButtonElement>("#assignment-cancel")!.click();
+  assert.deepEqual(posted, [{ type: "assignment-choice", requestId: "r2" }]);
 });
