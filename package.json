@@ -294,7 +294,7 @@
           "default": 30,
           "minimum": 0,
           "maximum": 10080,
-          "description": "Stop a local model worker after this many minutes without any running request, freeing its memory. Its sessions stay open and reload the model on their next request (KV caches are lost). 0 never stops idle workers."
+          "description": "Stop a worker after this many minutes without any running request, freeing its memory. Local model sessions stay open and reload the model on their next request (KV caches are lost); Copilot sessions are closed with their transcript kept and continue with Resume. 0 never stops idle workers."
         }
       }
     }

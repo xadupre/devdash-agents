@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   AgentApplication,
   parseApplicationMessage,
+  type CopilotWorkerSnapshot,
   type LocalSessionSetup,
 } from "./application";
 import { CopilotConversation } from "./conversation";
@@ -434,6 +435,81 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       })());
     let panel: vscode.WebviewPanel | undefined;
+    // Copilot CLI processes have no host object; idleness is derived from session state.
+    const copilotIdleSince = new Map<string, number>();
+    const copilotWorkers = (
+      state = application.getState(),
+    ): CopilotWorkerSnapshot[] => {
+      const now = Date.now();
+      const timeout = workerIdleMinutes() * 60_000;
+      const rows = new Map<
+        string,
+        CopilotWorkerSnapshot & { idleSince: number }
+      >();
+      const seen = new Set<string>();
+      for (const repository of state.repositories)
+        for (const slot of repository.sessions ?? []) {
+          if (slot.backend !== "copilot" || !slot.open) continue;
+          const key = `${repository.id}\n${slot.view}`;
+          seen.add(key);
+          const busy = slot.status !== "ready" && slot.status !== "error";
+          if (busy) copilotIdleSince.delete(key);
+          else if (!copilotIdleSince.has(key)) copilotIdleSince.set(key, now);
+          const assignment = slot.assignment;
+          const workerId = assignment?.worker.id ?? "";
+          const row = rows.get(workerId) ?? {
+            workerId,
+            workerName: assignment?.worker.name ?? "Copilot (no worker)",
+            machineName: assignment?.workerMachine.name ?? "This computer",
+            model:
+              slot.model ?? (assignment?.worker.model.source || "CLI default"),
+            sessions: [],
+            busy: false,
+            idleSince: 0,
+          };
+          row.sessions.push({ repositoryId: repository.id, view: slot.view });
+          row.busy ||= busy;
+          row.idleSince = Math.max(
+            row.idleSince,
+            copilotIdleSince.get(key) ?? now,
+          );
+          rows.set(workerId, row);
+        }
+      for (const key of copilotIdleSince.keys())
+        if (!seen.has(key)) copilotIdleSince.delete(key);
+      return [...rows.values()].map(({ idleSince, ...row }) => ({
+        ...row,
+        ...(!row.busy && timeout ? { idleStopAt: idleSince + timeout } : {}),
+      }));
+    };
+    const stopCopilotWorker = async (
+      workerId: string,
+      idleOnly = false,
+    ): Promise<void> => {
+      const row = copilotWorkers().find((entry) => entry.workerId === workerId);
+      if (!row) throw new Error("The Copilot worker is no longer running.");
+      if (row.busy)
+        throw new Error(
+          "Wait for the Copilot worker's running requests to finish.",
+        );
+      if (
+        idleOnly &&
+        (row.idleStopAt === undefined || row.idleStopAt > Date.now())
+      )
+        return;
+      for (const session of row.sessions)
+        await application.closeSession(session.repositoryId, session.view);
+    };
+    const copilotIdleTimer = setInterval(() => {
+      if (stopping) return;
+      for (const row of copilotWorkers())
+        if (row.idleStopAt !== undefined && row.idleStopAt <= Date.now())
+          void stopCopilotWorker(row.workerId, true).catch(() => {});
+    }, 30_000);
+    copilotIdleTimer.unref?.();
+    lifetime.signal.addEventListener("abort", () =>
+      clearInterval(copilotIdleTimer),
+    );
     const publish = (): void => {
       clearTimeout(publishTimer);
       publishTimer = undefined;
@@ -471,6 +547,10 @@ export function activate(context: vscode.ExtensionContext): void {
               : "This computer",
           };
         }),
+      });
+      void panel.webview.postMessage({
+        type: "copilot-workers",
+        workers: copilotWorkers(state),
       });
     };
     await application.refresh();
@@ -1512,6 +1592,9 @@ export function activate(context: vscode.ExtensionContext): void {
                 message.mode,
                 message.view,
               );
+              break;
+            case "stop-copilot-worker":
+              await stopCopilotWorker(message.workerId);
               break;
             case "stop-local-worker": {
               const host = localHosts.get(message.hostId);

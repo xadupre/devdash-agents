@@ -66,6 +66,18 @@ import {
 
 export type SessionStatus =
   "idle" | "saved" | "starting" | "ready" | "busy" | "error" | "stopping";
+/** Open Copilot CLI sessions grouped by configured worker (empty id: no worker). */
+export interface CopilotWorkerSnapshot {
+  workerId: string;
+  workerName: string;
+  machineName: string;
+  model: string;
+  sessions: { repositoryId: string; view: SessionView }[];
+  busy: boolean;
+  /** Epoch milliseconds when idle sessions will be closed. */
+  idleStopAt?: number;
+}
+
 export type SessionView =
   "copilot" | "local" | `local:${string}` | `copilot:${string}`;
 
@@ -263,6 +275,8 @@ export type ApplicationMessage =
   | { type: "foundry-download"; id: string }
   | { type: "local-device"; provider: LocalProvider; deviceId: number }
   | { type: "stop-local-worker"; hostId: string }
+  /** Empty workerId targets Copilot sessions opened without a configured worker. */
+  | { type: "stop-copilot-worker"; workerId: string }
   | {
       type: "local-placement";
       modelPath: string;
@@ -448,6 +462,12 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
     if (typeof hostId !== "string" || !/^[\w-]{1,100}$/.test(hostId))
       throw new Error("Invalid local model host.");
     return { type: "stop-local-worker", hostId };
+  }
+  if (value.type === "stop-copilot-worker") {
+    const workerId = "workerId" in value ? value.workerId : undefined;
+    if (typeof workerId !== "string" || !/^[\w-]{0,100}$/.test(workerId))
+      throw new Error("Invalid Copilot worker.");
+    return { type: "stop-copilot-worker", workerId };
   }
   if (value.type === "local-placement") {
     const modelPath = "modelPath" in value ? value.modelPath : undefined;

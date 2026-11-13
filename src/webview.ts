@@ -1698,6 +1698,7 @@ declare function acquireVsCodeApi(): {
     return undefined;
   }
   let localModels: import("./local-model-host").LocalModelSnapshot[] = [];
+  let copilotWorkers: import("./application").CopilotWorkerSnapshot[] = [];
   const statusLabels = {
     idle: "Not started",
     saved: "Session closed - use Resume or New",
@@ -1740,46 +1741,81 @@ declare function acquireVsCodeApi(): {
     const running = localModels.filter(
       (model) => model.status !== "disk" && model.status !== "unloaded",
     );
-    element("worker-table", HTMLTableElement).hidden = !running.length;
-    element("worker-table-empty", HTMLElement).hidden = !!running.length;
+    const count = running.length + copilotWorkers.length;
+    element("worker-table", HTMLTableElement).hidden = !count;
+    element("worker-table-empty", HTMLElement).hidden = !!count;
+    const autoStop = (busy: boolean, at?: number): string =>
+      busy
+        ? "not while running"
+        : at === undefined
+          ? "never"
+          : `at ${new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    const row = (
+      cells: string[],
+      key: string,
+      disabled: boolean,
+      title: string,
+      message: import("./application").ApplicationMessage,
+    ): HTMLTableRowElement => {
+      const row = document.createElement("tr");
+      for (const text of cells) {
+        const cell = document.createElement("td");
+        cell.textContent = text;
+        row.append(cell);
+      }
+      const actions = document.createElement("td");
+      const stop = document.createElement("button");
+      stop.type = "button";
+      stop.textContent = "Stop";
+      stop.dataset.hostId = key;
+      stop.title = title;
+      stop.disabled = disabled;
+      stop.addEventListener("click", () => vscode.postMessage(message));
+      actions.append(stop);
+      row.append(actions);
+      return row;
+    };
     body.replaceChildren(
-      ...running.map((model) => {
-        const row = document.createElement("tr");
-        for (const text of [
-          model.workerName ?? "Legacy local model",
-          model.machineName ?? "This computer",
-          model.name ?? model.modelPath,
-          model.device
-            ? `${model.device.provider.toUpperCase()} ${model.device.deviceId}`
-            : model.placement.provider.toUpperCase(),
-          model.busy ? "running a request" : model.status,
-          String(model.sessions.length),
+      ...running.map((model) =>
+        row(
+          [
+            model.workerName ?? "Legacy local model",
+            model.machineName ?? "This computer",
+            model.name ?? model.modelPath,
+            model.device
+              ? `${model.device.provider.toUpperCase()} ${model.device.deviceId}`
+              : model.placement.provider.toUpperCase(),
+            model.busy ? "running a request" : model.status,
+            String(model.sessions.length),
+            autoStop(model.busy, model.idleStopAt),
+          ],
+          model.id ?? "",
+          !model.id || model.busy || model.status === "loading",
           model.busy
-            ? "not while running"
-            : model.idleStopAt === undefined
-              ? "never"
-              : `at ${new Date(model.idleStopAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
-        ]) {
-          const cell = document.createElement("td");
-          cell.textContent = text;
-          row.append(cell);
-        }
-        const actions = document.createElement("td");
-        const stop = document.createElement("button");
-        stop.type = "button";
-        stop.textContent = "Stop";
-        stop.dataset.hostId = model.id ?? "";
-        stop.title = model.busy
-          ? "Wait for the running request to finish"
-          : "Stop this worker and free its memory; sessions reload it when needed";
-        stop.disabled = !model.id || model.busy || model.status === "loading";
-        stop.addEventListener("click", () =>
-          vscode.postMessage({ type: "stop-local-worker", hostId: model.id! }),
-        );
-        actions.append(stop);
-        row.append(actions);
-        return row;
-      }),
+            ? "Wait for the running request to finish"
+            : "Stop this worker and free its memory; sessions reload it when needed",
+          { type: "stop-local-worker", hostId: model.id ?? "" },
+        ),
+      ),
+      ...copilotWorkers.map((worker) =>
+        row(
+          [
+            worker.workerName,
+            worker.machineName,
+            `Copilot: ${worker.model}`,
+            "Copilot CLI",
+            worker.busy ? "running a request" : "ready",
+            String(worker.sessions.length),
+            autoStop(worker.busy, worker.idleStopAt),
+          ],
+          `copilot:${worker.workerId}`,
+          worker.busy,
+          worker.busy
+            ? "Wait for the running requests to finish"
+            : "Close this worker's Copilot CLI sessions and free their memory; Resume continues them",
+          { type: "stop-copilot-worker", workerId: worker.workerId },
+        ),
+      ),
     );
     if (focused)
       [...body.querySelectorAll<HTMLButtonElement>("button")]
@@ -3591,6 +3627,10 @@ declare function acquireVsCodeApi(): {
             type: "local-models";
             models: import("./local-model-host").LocalModelSnapshot[];
           }
+        | {
+            type: "copilot-workers";
+            workers: import("./application").CopilotWorkerSnapshot[];
+          }
         | { type: "error"; message: string; id?: string }
         | {
             type: "execution-configuration-error";
@@ -3724,6 +3764,9 @@ declare function acquireVsCodeApi(): {
         }
         updateHarnessSaveButton();
         renderSettings();
+      } else if (event.data.type === "copilot-workers") {
+        copilotWorkers = event.data.workers;
+        renderWorkerTable();
       } else if (event.data.type === "local-models") {
         localModels = event.data.models;
         renderLocalModels();

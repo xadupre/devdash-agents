@@ -85,13 +85,15 @@ that selection starts a fresh worker and the conversation's prompt is evaluated
 again to rebuild its cache.
 
 The **Running workers** table at the top of the Sessions panel lists each
-loaded worker with its machine, model, device, status, session count and
-automatic stop time. **Stop** stops the worker process and frees its memory
-immediately; its sessions stay open, and their next request reloads the model
-and rebuilds the cache. Idle workers stop automatically after
+loaded local model worker and each Copilot worker with open sessions, with its
+machine, model, device, status, session count and automatic stop time.
+**Stop** frees its memory immediately. A local model worker's process stops and
+its sessions stay open; their next request reloads the model and rebuilds the
+cache. A Copilot worker's CLI sessions are closed like **Close**: transcripts
+are kept and **Resume** continues them. Idle workers stop automatically after
 ``devdashAgents.workerIdleMinutes`` (30 by default; 0 never stops them). A
 worker never stops while a request is running; the delay restarts after each
-request. Copilot CLI processes are not affected.
+request.
 
 Use **Add**, then a native worker, to open another independent local conversation for the
 same repository. Each new session saves its chosen worker and execution machine;

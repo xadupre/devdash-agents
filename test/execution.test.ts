@@ -599,4 +599,14 @@ test("stop-local-worker messages name one host", () => {
       parseApplicationMessage({ type: "stop-local-worker", hostId: "../x" }),
     /local model host/,
   );
+  for (const workerId of ["copilot-gpu", ""])
+    assert.deepEqual(
+      parseApplicationMessage({ type: "stop-copilot-worker", workerId }),
+      { type: "stop-copilot-worker", workerId },
+    );
+  assert.throws(
+    () =>
+      parseApplicationMessage({ type: "stop-copilot-worker", workerId: "a/b" }),
+    /Copilot worker/,
+  );
 });

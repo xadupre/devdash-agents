@@ -5450,7 +5450,58 @@ test("the worker table lists running workers and stops idle ones on demand", asy
     type: "stop-local-worker",
     hostId: "idle",
   });
+  dom.window.dispatchEvent(
+    new dom.window.MessageEvent("message", {
+      data: {
+        type: "copilot-workers",
+        workers: [
+          {
+            workerId: "copilot-gpu",
+            workerName: "Copilot @ GPU",
+            machineName: "GPU host",
+            model: "CLI default",
+            sessions: [{ repositoryId: "repo", view: "copilot" }],
+            busy: false,
+          },
+          {
+            workerId: "",
+            workerName: "Copilot (no worker)",
+            machineName: "This computer",
+            model: "gpt",
+            sessions: [],
+            busy: true,
+          },
+        ],
+      },
+    }),
+  );
   send([]);
+  const copilotRows = [
+    ...document.querySelectorAll<HTMLTableRowElement>("#worker-table tbody tr"),
+  ];
+  assert.deepEqual(
+    [...copilotRows[0]!.cells].slice(0, 7).map((cell) => cell.textContent),
+    [
+      "Copilot @ GPU",
+      "GPU host",
+      "Copilot: CLI default",
+      "Copilot CLI",
+      "ready",
+      "1",
+      "never",
+    ],
+  );
+  assert.equal(copilotRows[1]!.querySelector("button")!.disabled, true);
+  copilotRows[0]!.querySelector("button")!.click();
+  assert.deepEqual(posted.at(-1), {
+    type: "stop-copilot-worker",
+    workerId: "copilot-gpu",
+  });
+  dom.window.dispatchEvent(
+    new dom.window.MessageEvent("message", {
+      data: { type: "copilot-workers", workers: [] },
+    }),
+  );
   assert.equal(
     document.querySelector<HTMLElement>("#worker-table-empty")!.hidden,
     false,
