@@ -3,6 +3,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  realpath,
   readFile,
   readdir,
   rm,
@@ -442,7 +443,7 @@ test(
       join(source, "weights.onnx"),
       signal,
     );
-    assert.equal(prepared, source);
+    assert.equal(prepared, await realpath(source));
     const uploaded = await uploadRemoteModel(
       machine,
       source,
@@ -507,7 +508,7 @@ printf '{}' > "$output/genai_config.json"
       worker.model.source,
       signal,
     );
-    assert.equal(exported.startsWith(machine.modelsPath), true);
+    assert.equal(exported.startsWith(await realpath(machine.modelsPath)), true);
     const args = await readFile(join(exported, "build-arguments"), "utf8");
     assert.match(args, /-m\nQwen\/Qwen3-0.6B\n/);
     assert.match(args, /-e\ncuda\n/);

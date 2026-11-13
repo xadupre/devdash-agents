@@ -320,6 +320,10 @@ test(
   { skip: !posix },
   async (t) => {
     const home = await directory(t);
+    const bin = join(await directory(t), "bin");
+    await mkdir(bin);
+    await writeFile(join(bin, "flock"), "#!/bin/sh\nexit 0\n");
+    await chmod(join(bin, "flock"), 0o755);
     const native = join(await directory(t), "native");
     await mkdir(join(native, "src"), { recursive: true });
     await writeFile(join(native, "CMakeLists.txt"), "");
@@ -334,7 +338,10 @@ test(
     t.after(() => {
       process.env.HOME = previous;
     });
-    const remote = { name: "vm", command: connection };
+    const remote = {
+      name: "vm",
+      command: `env "PATH=${bin}:${process.env.PATH}" ${connection}`,
+    };
 
     await assert.rejects(
       ensureRemoteWorker(

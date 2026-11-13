@@ -181,7 +181,10 @@ export class LocalConversation implements Conversation {
         if (this.tools.remote) {
           const result = await runRemoteScript(
             this.tools.remote,
-            "cd -- \"$1\" && find . -mindepth 1 -maxdepth 1 -printf '%f\\0'",
+            `cd -- "$1" && for entry in ./* ./.[!.]* ./..?*; do
+  [ -e "$entry" ] || [ -L "$entry" ] || continue
+  printf '%s\\0' "\${entry#./}"
+done`,
             [this.tools.repositoryPath],
             { signal: operationSignal },
           );
