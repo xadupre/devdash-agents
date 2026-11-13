@@ -1038,7 +1038,8 @@ export class AgentApplication {
               view: this.sessionView(slot),
               backend: slot.backend ?? "copilot",
               status:
-                slot.parallel.size && ["ready", "error"].includes(slot.status)
+                (slot.parallel.size || slot.postMortemOperation) &&
+                ["ready", "error"].includes(slot.status)
                   ? ("busy" as const)
                   : slot.status,
               open: Boolean(
@@ -1640,9 +1641,8 @@ export class AgentApplication {
       (main.copilots ??= []).push(slot);
     }
     main.view = this.sessionView(slot);
-    if (assignment) this.setAssignment(slot, assignment);
     this.activeId = id;
-    return this.newSession(id);
+    return this.newSession(id, undefined, assignment);
   }
 
   /** Assignment of the session displayed in the active repository. */

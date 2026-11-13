@@ -413,6 +413,82 @@ test("resuming legacy sessions adopts the selected assignment without retargetin
   assert.equal(alreadyOpen.getAssignment(repository), undefined);
 });
 
+test("adding a Copilot session archives its old assignment and PostMortem keeps its worker busy", async (t) => {
+  const applications: AgentApplication[] = [];
+  const root = await directory(t, applications);
+  const repository = join(root, "alpha");
+  await mkdir(join(repository, ".git"), { recursive: true });
+  await writeFile(join(repository, "scenario"), "persist");
+  const selected = assignSession(config, "copilot", "local");
+  const next = assignSession(config, "copilot", "gpu");
+  const application = new AgentApplication(
+    root,
+    (repo) =>
+      new CopilotConversation({
+        cliPath: join(__dirname, "fixtures", "copilot.js"),
+        workingDirectory: repo.path,
+        timeoutMs: 5000,
+      }),
+    () => {},
+    {
+      version: 1,
+      root,
+      sessions: [
+        {
+          id: repository,
+          backend: "copilot",
+          sessionId: "legacy",
+          draft: "",
+          messages: [{ role: "user", content: "Legacy transcript" }],
+        },
+      ],
+    },
+  );
+  applications.push(application);
+  await application.refresh();
+  await application.addCopilotSession(repository, selected);
+  const saved = application.getSnapshot().sessions[0]!;
+  assert.equal(
+    saved.assignment && JSON.stringify(saved.assignment),
+    JSON.stringify(selected),
+  );
+  assert.equal(saved.history?.[0]?.sessionId, "legacy");
+  assert.equal(saved.history?.[0]?.assignment, undefined);
+  await application.addCopilotSession(repository, next);
+  const activeView = application.getState().repositories[0]!.view!;
+  await application.send(repository, "Analyse this transcript");
+
+  let started!: () => void;
+  const waiting = new Promise<void>((resolve) => (started = resolve));
+  const postMortem = application.createPostMortem(
+    repository,
+    (_source, signal) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+        started();
+      }),
+  );
+  const cancelled = assert.rejects(postMortem, { name: "AbortError" });
+  await waiting;
+  const worker = application
+    .getState()
+    .repositories[0]!.sessions!.find((session) => session.view === activeView)!;
+  assert.equal(worker.status, "busy");
+  const groups = new CopilotWorkerMonitor().snapshots(
+    application.getState(),
+    1,
+  );
+  const activeGroup = groups.find((group) =>
+    group.sessions.some((session) => session.view === activeView),
+  )!;
+  assert.equal(activeGroup.busy, true);
+  assert.equal(activeGroup.idleStopAt, undefined);
+  application.cancel(repository, activeView);
+  await cancelled;
+});
+
 test("Copilot worker groups preserve saved bindings and stop only while still idle", async () => {
   const first = assignSession(config, "copilot", "local");
   const second = assignSession(config, "copilot", "gpu");
