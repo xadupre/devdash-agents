@@ -292,8 +292,8 @@ The Sphinx build uses the committed images and does not need a browser.
 GitHub Actions
 --------------
 
-* **Tests**: formatting, lint, unit tests, high-severity dependency audit and
-  universal VSIX packaging on Linux and Windows. Native packaging additionally
+* **Tests**: formatting, lint, unit tests and high-severity dependency audit on
+  Linux, Windows and macOS. Native packaging additionally
   builds Linux/Windows x64 CPU and CUDA variants and macOS arm64 CPU, runs
   native policy/protocol tests and real tiny-model inference, and validates
   each relocated VSIX. Runs for pushes to ``main``, PRs and manual runs.
