@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -40,7 +41,7 @@ const machine: RemoteMachine = {
 async function directory(t: TestContext): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "devdash-remote-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  return root;
+  return realpath(root);
 }
 
 test("remote invocations quote the remote command after the connection arguments", () => {

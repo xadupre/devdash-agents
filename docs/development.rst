@@ -20,6 +20,14 @@ Local checks
 unit coverage is not evidence that the interactive VS Code UI has been tested.
 None of these commands sends a model request.
 
+On macOS, the remote-operation tests use a local shell to stand in for the
+remote machine and need its GNU utilities:
+
+.. code-block:: bash
+
+   brew install coreutils grep
+   export PATH="$(brew --prefix coreutils)/libexec/gnubin:$(brew --prefix grep)/libexec/gnubin:$PATH"
+
 ``npm run smoke`` sends three real requests through the authenticated local CLI
 and checks the result, Markdown renderer and a file read in a temporary Git
 repository, including live tool execution/result events. It stops the CLI,
@@ -292,8 +300,8 @@ The Sphinx build uses the committed images and does not need a browser.
 GitHub Actions
 --------------
 
-* **Tests**: formatting, lint, unit tests, high-severity dependency audit and
-  universal VSIX packaging on Linux and Windows. Native packaging additionally
+* **Tests**: formatting, lint, unit tests and high-severity dependency audit on
+  Linux, Windows and macOS. Native packaging additionally
   builds Linux/Windows x64 CPU and CUDA variants and macOS arm64 CPU, runs
   native policy/protocol tests and real tiny-model inference, and validates
   each relocated VSIX. Runs for pushes to ``main``, PRs and manual runs.

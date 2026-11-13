@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -48,6 +48,12 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      - name: Install remote-test utilities on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install coreutils grep
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix grep)/libexec/gnubin" >> "$GITHUB_PATH"
       - run: npm ci
       - run: npm run check
       - run: npm audit --audit-level=high
