@@ -13,7 +13,7 @@ export async function run(): Promise<void> {
   assert.ok(commands.includes("devdashAgents.open"));
   await vscode.commands.executeCommand("devdashAgents.open");
   const appTabOpened = vscode.window.tabGroups.all.some((group) =>
-    group.tabs.some((tab) => tab.label === "Arranged Agents"),
+    group.tabs.some((tab) => tab.label === "DevDash Agents"),
   );
   assert.ok(appTabOpened, "The application must open in an editor tab.");
   await writeFile(

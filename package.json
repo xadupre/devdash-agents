@@ -1,6 +1,6 @@
 {
   "name": "devdash-agents",
-  "displayName": "Arranged Agents",
+  "displayName": "DevDash Agents",
   "description": "Calls the locally installed Copilot CLI and presents its answers as structured Markdown.",
   "version": "0.1.0",
   "publisher": "xadupre",
@@ -34,15 +34,15 @@
     "commands": [
       {
         "command": "devdashAgents.open",
-        "title": "Arranged Agents: Open"
+        "title": "DevDash Agents: Open"
       },
       {
         "command": "devdashAgents.ask",
-        "title": "Arranged Agents: Ask Copilot"
+        "title": "DevDash Agents: Ask Copilot"
       }
     ],
     "configuration": {
-      "title": "Arranged Agents v0.1.0",
+      "title": "DevDash Agents v0.1.0",
       "properties": {
         "devdashAgents.cliPath": {
           "type": "string",

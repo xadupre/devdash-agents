@@ -167,7 +167,7 @@ export function renderApplication(resources: {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; script-src 'nonce-${nonce}'; style-src ${escape(resources.cspSource)}; base-uri 'none'; form-action 'none';">
-<title>Arranged Agents</title>
+<title>DevDash Agents</title>
 <link rel="stylesheet" href="${escape(resources.styleUri)}">
 </head>
 <body>
@@ -423,7 +423,7 @@ export function renderApplication(resources: {
         <p id="local-device-error" class="settings-error" role="alert" hidden></p>
         <p class="repository-hint">This preference is used the next time a shared model is loaded. Move a loaded model between devices or unload it in the Sessions panel.</p>
       </section>
-      <button id="open-vscode-settings" type="button" title="Open all Arranged Agents settings in VS Code">All settings in VS Code...</button>
+      <button id="open-vscode-settings" type="button" title="Open all DevDash Agents settings in VS Code">All settings in VS Code...</button>
     </section>
   </aside>
 </main>
@@ -441,7 +441,7 @@ export function renderResult(question: string, answer: string): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; style-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none';">
-<title>Arranged Agents</title>
+<title>DevDash Agents</title>
 <style nonce="${nonce}">
 body { max-width: 900px; margin: 0 auto; padding: 24px; color: var(--vscode-editor-foreground); background: var(--vscode-editor-background); font-family: var(--vscode-font-family); line-height: 1.6; overflow-wrap: anywhere; }
 header { border-bottom: 1px solid var(--vscode-panel-border); margin-bottom: 24px; }
@@ -454,7 +454,7 @@ img { display: block; max-width: 100%; max-height: 600px; height: auto; object-f
 </style>
 </head>
 <body>
-<header><h1>Arranged Agents</h1><p>${markdown.utils.escapeHtml(question)}</p></header>
+<header><h1>DevDash Agents</h1><p>${markdown.utils.escapeHtml(question)}</p></header>
 <main>${renderMarkdown(answer)}</main>
 </body>
 </html>`;

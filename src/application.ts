@@ -2126,7 +2126,7 @@ export class AgentApplication {
 
   /**
    * Resumes an existing Copilot session in the repository. A conversation
-   * archived by Arranged Agents is restored with its transcript; a session
+   * archived by DevDash Agents is restored with its transcript; a session
    * created elsewhere (for example by the CLI) starts with an empty transcript.
    */
   resumeSession(id: string, sessionId: string): Promise<void> {
@@ -2173,7 +2173,7 @@ export class AgentApplication {
       if (!archived) {
         session.messages.push({
           role: "system",
-          content: `Resumed existing Copilot session ${sessionId}. Earlier messages from outside Arranged Agents are not shown, but the model keeps their context.`,
+          content: `Resumed existing Copilot session ${sessionId}. Earlier messages from outside DevDash Agents are not shown, but the model keeps their context.`,
         });
       }
       this.activeId = id;
@@ -2871,7 +2871,7 @@ export class AgentApplication {
 
   private assertOpen(): void {
     if (this.closed) {
-      throw new Error("The Arranged Agents tab is closed.");
+      throw new Error("The DevDash Agents tab is closed.");
     }
   }
 

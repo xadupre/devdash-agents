@@ -5,7 +5,7 @@ if [[ "${1-}" == --help || "${1-}" == -h ]]; then
     printf '%s\n' \
         'Usage: ./start.sh [repository-parent] [VS Code options...]' \
         '' \
-        'Installs missing dependencies, compiles incrementally, and opens Arranged Agents in VS Code.' \
+        'Installs missing dependencies, compiles incrementally, and opens DevDash Agents in VS Code.' \
         'The repository parent defaults to the source checkout parent, not the current directory.' \
         'Progress and elapsed times are printed by default.' \
         'Use START_VERBOSE=1 to enable command tracing.' \
@@ -44,7 +44,7 @@ done
 node -e '
 const [major, minor] = process.versions.node.split(".").map(Number);
 if (major < 22 || (major === 22 && minor < 13)) {
-    console.error("Arranged Agents requires Node.js 22.13 or newer.");
+    console.error("DevDash Agents requires Node.js 22.13 or newer.");
     process.exit(1);
 }
 '

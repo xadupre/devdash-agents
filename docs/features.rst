@@ -1,7 +1,7 @@
 Features
 ========
 
-Arranged Agents groups its user-facing capabilities by topic: GitHub queries
+DevDash Agents groups its user-facing capabilities by topic: GitHub queries
 and the rest of the application. Start with :doc:`getting_started` for
 installation and a first conversation.
 

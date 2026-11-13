@@ -65,7 +65,7 @@ From a Bash terminal in this checkout, run:
 
 The launcher installs missing project dependencies, compiles the extension,
 and opens a new VS Code development window. Other installed extensions are
-disabled in that window. The **Arranged Agents** editor tab opens automatically.
+disabled in that window. The **DevDash Agents** editor tab opens automatically.
 Without a directory argument, the source checkout's parent directory is used as
 the repository parent, regardless of the terminal's current directory.
 To choose a different parent directory containing your repositories:
@@ -87,7 +87,7 @@ Close the development window and rerun the script after editing the code.
 The launcher chooses a desktop ``code`` executable rather than the restricted
 ``remote-cli`` executable. In WSL, make the Windows VS Code ``bin`` directory
 available on ``PATH``. If only a remote CLI is available, use VS Code's
-**Run Arranged Agents** launch configuration with F5 instead.
+**Run DevDash Agents** launch configuration with F5 instead.
 
 Choose a repository and chat
 ----------------------------
@@ -102,7 +102,7 @@ The **Session** dropdown switches between this repository's open sessions.
 Selecting another repository never opens a session automatically.
 **Resume** lists the repository's saved Copilot sessions,
 including ones started from the Copilot CLI, and resumes the chosen one; a
-session started outside Arranged Agents keeps its model context but its earlier
+session started outside DevDash Agents keeps its model context but its earlier
 messages are not shown. **New** closes and archives the selected conversation and
 starts a fresh one.
 When **Session open - ready** appears,
@@ -346,7 +346,7 @@ Configuration and remote workspaces
 Click **Settings** at the top right of the conversation to show the settings
 panel, where the Copilot model, the local model and the local device are
 chosen; **All settings in VS Code...**
-opens the Arranged Agents settings page in VS Code. No repository session needs
+opens the DevDash Agents settings page in VS Code. No repository session needs
 to be started.
 VS Code persists the selected user or workspace settings.
 
@@ -380,6 +380,6 @@ created by the release workflow attach a VSIX; they do not publish to the
 VS Code Marketplace. The project is currently ``UNLICENSED``.
 
 For an installed VSIX, open a parent directory in VS Code and run
-**Arranged Agents: Open** from the Command Palette. **Arranged Agents: Ask
+**DevDash Agents: Open** from the Command Palette. **DevDash Agents: Ask
 Copilot** is retained as an alias. Automatic tab opening is limited to the
 development launch.

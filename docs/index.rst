@@ -1,14 +1,14 @@
-Arranged Agents
+DevDash Agents
 ===============
 
 Version |release|. Last generated on |today|.
 
 .. image:: ../media/icon.svg
-   :alt: Arranged Agents icon
+   :alt: DevDash Agents icon
    :width: 128px
    :height: 128px
 
-Arranged Agents is a two-panel application in a VS Code editor tab. The left
+DevDash Agents is a two-panel application in a VS Code editor tab. The left
 contains a Copilot conversation with HTML and equations; the right switches
 between Git repositories beneath a chosen parent directory, repository activity
 (issues, PRs, comments and commits), and logs.

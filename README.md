@@ -1,6 +1,6 @@
-# Arranged Agents
+# DevDash Agents
 
-<img src="media/icon.png" alt="Arranged Agents icon" width="128" height="128">
+<img src="media/icon.png" alt="DevDash Agents icon" width="128" height="128">
 
 [![Tests](https://github.com/xadupre/devdash-agents/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/xadupre/devdash-agents/actions/workflows/tests.yml)
 [![Code coverage](https://codecov.io/gh/xadupre/devdash-agents/branch/main/graph/badge.svg)](https://codecov.io/gh/xadupre/devdash-agents)
@@ -67,7 +67,7 @@ From a Bash terminal in this checkout, run:
 Like onnx-light-viewer, `start.sh` installs missing dependencies, compiles, and opens a new VS Code
 development window. It chooses the desktop `code` executable, not the restricted
 remote CLI, and removes the remote IPC hook. Other installed extensions are
-disabled in that window. The **Arranged Agents** tab opens automatically.
+disabled in that window. The **DevDash Agents** tab opens automatically.
 The launcher uses the source checkout's parent directory, regardless of the
 terminal's current directory. To choose another parent containing your repositories:
 
@@ -85,9 +85,9 @@ The source checkout is used for compilation, not as the implicit repository root
 No Copilot process or session starts until a repository is clicked.
 
 Alternatively run `npm ci` and open this directory in VS Code,
-then select **Run Arranged Agents** and press **F5**. In the development window,
+then select **Run DevDash Agents** and press **F5**. In the development window,
 the application opens automatically and scans the first workspace folder.
-For an installed VSIX, run **Arranged Agents: Open** from the Command Palette.
+For an installed VSIX, run **DevDash Agents: Open** from the Command Palette.
 The old **Ask Copilot** command is an alias for opening the application.
 
 Select a repository on the right, click **Open Copilot session**, wait for **Session open - ready**, and send messages
@@ -179,7 +179,7 @@ Right-click a repository (or press Shift+F10) to manage its sessions:
 - **Delete latest session** deletes the latest conversation and restores the
   previous saved one without starting Copilot.
 - **Delete all sessions for this repository** deletes only this repository's
-  conversations managed by Arranged Agents, never other repositories' sessions.
+  conversations managed by DevDash Agents, never other repositories' sessions.
 
 Deletion requires a quiet inline confirmation and removes both application history
 and the corresponding Copilot sessions through the official SDK API. Repository
@@ -201,7 +201,7 @@ Equations use `$x^2$` inline or `$$E=mc^2$$` on their own line. KaTeX renders
 native MathML without loading external fonts or scripts.
 
 Click **Settings** at the top right to show the settings panel, which chooses
-the Copilot model, the local model and the local device, and links to the Arranged Agents settings page in
+the Copilot model, the local model and the local device, and links to the DevDash Agents settings page in
 VS Code. `devdashAgents.requestTimeoutMinutes` defaults to **60 minutes** and
 limits total operation time, including tools and permission waits. Changes apply
 to subsequent operations, even in existing sessions.

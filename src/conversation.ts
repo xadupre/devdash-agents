@@ -122,7 +122,7 @@ export class CopilotConversation implements Conversation {
           allowTranscriptRecovery: false,
           continuePendingWork: false,
         })
-      : await client.createSession({ ...config, name: "Arranged Agents" });
+      : await client.createSession({ ...config, name: "DevDash Agents" });
     this.savedSessionId = this.session.sessionId;
     signal.throwIfAborted();
   }
