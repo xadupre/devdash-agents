@@ -1,0 +1,208 @@
+{
+  "name": "arranged-agents",
+  "displayName": "Arranged Agents",
+  "description": "Calls the locally installed Copilot CLI and presents its answers as structured Markdown.",
+  "version": "0.1.0",
+  "publisher": "xadupre",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xadupre/arranged-agents.git"
+  },
+  "engines": {
+    "vscode": "^1.145.0",
+    "node": ">=22.13.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    },
+    "virtualWorkspaces": false
+  },
+  "main": "./dist/src/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "arrangedAgents.open",
+        "title": "Arranged Agents: Open"
+      },
+      {
+        "command": "arrangedAgents.ask",
+        "title": "Arranged Agents: Ask Copilot"
+      }
+    ],
+    "configuration": {
+      "title": "Arranged Agents v0.1.0",
+      "properties": {
+        "arrangedAgents.cliPath": {
+          "type": "string",
+          "default": "copilot",
+          "scope": "machine",
+          "description": "Path to your installed Copilot CLI executable. It is executed directly, not through a shell."
+        },
+        "arrangedAgents.model": {
+          "type": "string",
+          "default": "",
+          "description": "Copilot model ID, chosen in the Settings panel. Empty uses the CLI default."
+        },
+        "arrangedAgents.localModelPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Local GenAI model directory, Transformers checkpoint directory, or Hugging Face model ID (model or owner/model). Choose in Settings to prepare and save a GenAI export; checkpoint preparation requires Python model-builder dependencies."
+        },
+        "arrangedAgents.localWorkerPath": {
+          "type": "string",
+          "default": "arranged-genai-worker",
+          "scope": "machine",
+          "description": "Path to an external native worker, including NPU-enabled builds. By default, use the development worker, then the platform VSIX's bundled CPU or CUDA worker, then arranged-genai-worker on PATH. Executed directly without a shell."
+        },
+        "arrangedAgents.remoteMachines": {
+          "type": "array",
+          "default": [],
+          "scope": "machine",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "command",
+              "workerPath",
+              "modelPath",
+              "repositoriesPath"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Unique machine name."
+              },
+              "command": {
+                "type": "string",
+                "description": "Connection command run without a shell and followed by -- and the remote command, for example: az ssh vm --ip <ip-address> --subscription <id>."
+              },
+              "workerPath": {
+                "type": "string",
+                "description": "Native worker executable on the remote machine."
+              },
+              "modelPath": {
+                "type": "string",
+                "description": "Absolute remote model directory containing genai_config.json."
+              },
+              "repositoriesPath": {
+                "type": "string",
+                "description": "Absolute remote directory containing the repositories under their local folder names."
+              }
+            }
+          },
+          "description": "Remote machines that can run local models and their tools, edited in the Settings panel."
+        },
+        "arrangedAgents.remoteMachine": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Name of the remote machine running local workers and tools, chosen in the Settings panel. Empty uses this computer."
+        },
+        "arrangedAgents.localDeviceId": {
+          "type": "integer",
+          "default": -1,
+          "minimum": -1,
+          "scope": "machine",
+          "description": "Preferred local provider device ID. -1 selects automatically; the Settings panel lists discovered devices."
+        },
+        "arrangedAgents.localProvider": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "cuda",
+            "npu",
+            "cpu"
+          ],
+          "default": "auto",
+          "scope": "machine",
+          "enumDescriptions": [
+            "Prefer CUDA when available, then another available provider.",
+            "Use CUDA; fail explicitly if unavailable or incompatible.",
+            "Use a supported NPU; fail explicitly if unavailable or incompatible.",
+            "Use CPU."
+          ],
+          "description": "Preferred local execution provider, chosen in the Settings panel. Only explicitly opened local sessions use the native worker; Copilot sessions are unchanged."
+        },
+        "arrangedAgents.approvedUrlOrigins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine",
+          "description": "Remembered URL roots approved for reading (scheme, hostname and optional port, for example https://example.com). Applies across repositories. Remove an entry to require approval again. HTTPS GitHub file reads are automatically approved."
+        },
+        "arrangedAgents.requestTimeoutMinutes": {
+          "type": "integer",
+          "default": 60,
+          "minimum": 1,
+          "maximum": 35791,
+          "description": "Maximum total duration of a Copilot operation in minutes, including tools and permission waits. Changes apply to subsequent operations, including in existing sessions."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run compile && node --test dist/test/*.test.js",
+    "coverage": "npm run compile && c8 --all --src dist/src --include=dist/src/** --reporter=lcov --reporter=text --reports-dir=build/coverage/typescript node --test dist/test/*.test.js",
+    "smoke": "npm run compile && node dist/scripts/smoke.js",
+    "docs:screenshots": "npm run compile && node dist/scripts/docs-screenshots.js",
+    "check": "npm run format:check && npm run lint && npm test",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --skip-license",
+    "package:native": "python native/package-worker.py",
+    "package:verify": "python native/verify-package.py"
+  },
+  "dependencies": {
+    "@github/copilot-sdk": "1.0.29",
+    "@vscode/markdown-it-katex": "^1.1.2",
+    "markdown-it": "^14.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "@types/markdown-it": "^14.1.0",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "1.145.0",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "@vscode/vsce": "^4.1.0",
+    "c8": "^12.0.0",
+    "eslint": "^10.13.0",
+    "jsdom": "^31.0.0",
+    "playwright": "^1.65.0",
+    "prettier": "^3.0.0",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-eslint": "^8.72.1"
+  },
+  "overrides": {
+    "@github/copilot-sdk": {
+      "zod": "^4.6.7"
+    },
+    "@vscode/vsce": {
+      "@azure/identity": "4.13.0"
+    },
+    "@vscode/markdown-it-katex": {
+      "katex": "^0.19.1"
+    },
+    "parse5": "^8.1.0"
+  }
+}

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title description">
+  <title id="title">Arranged Agents</title>
+  <desc id="description">Three application panels with a conversation bubble and three connected repository agents.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#172554"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#67e8f9"/>
+      <stop offset="1" stop-color="#a5b4fc"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="52" fill="url(#background)"/>
+  <rect x="24" y="46" width="208" height="164" rx="16" fill="#ffffff" fill-opacity=".06" stroke="#64748b" stroke-width="2"/>
+  <path d="M56 47v162M176 47v162" stroke="#64748b" stroke-width="2"/>
+  <path d="M82 80h68a10 10 0 0 1 10 10v48a10 10 0 0 1-10 10h-34l-22 20v-20H82a10 10 0 0 1-10-10V90a10 10 0 0 1 10-10Z" fill="url(#accent)"/>
+  <path d="M92 104h48M92 120h32" fill="none" stroke="#172554" stroke-width="6" stroke-linecap="round"/>
+  <path d="M196 88v80" fill="none" stroke="#818cf8" stroke-width="4"/>
+  <circle cx="196" cy="88" r="9" fill="#67e8f9"/>
+  <circle cx="196" cy="128" r="9" fill="#a5b4fc"/>
+  <circle cx="196" cy="168" r="9" fill="#67e8f9"/>
+  <path d="M213 88h5M213 128h5M213 168h5" stroke="#cbd5e1" stroke-width="4" stroke-linecap="round"/>
+</svg>

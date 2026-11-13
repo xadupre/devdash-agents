@@ -1,0 +1,64 @@
+name: Native platform packages
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.target }} (${{ matrix.variant }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: linux-x64
+            variant: cpu
+          - os: ubuntu-22.04
+            target: linux-x64
+            variant: cuda
+          - os: windows-latest
+            target: win32-x64
+            variant: cpu
+          - os: windows-latest
+            target: win32-x64
+            variant: cuda
+          - os: macos-15
+            target: darwin-arm64
+            variant: cpu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: python native/package-worker.py --target ${{ matrix.target }} --variant ${{ matrix.variant }}
+      - run: python native/tests/fetch_model.py
+      - run: ctest --test-dir build/native -C Release --output-on-failure
+        env:
+          ARRANGED_TEST_MODEL_DIR: ${{ github.workspace }}/build/native-deps/model-chat
+          ARRANGED_TEST_MODEL_HAS_CHAT_TEMPLATE: "1"
+      - run: npm run check
+      - run: npm audit --audit-level=high
+      - run: npm run package -- --target ${{ matrix.target }} --out build/arranged-agents-${{ matrix.target }}-${{ matrix.variant }}.vsix
+      # Hosted runners have no NVIDIA GPU; both runtime variants must work on CPU.
+      - run: python native/verify-package.py build/arranged-agents-${{ matrix.target }}-${{ matrix.variant }}.vsix
+        env:
+          ARRANGED_TEST_MODEL_DIR: ${{ github.workspace }}/build/native-deps/model-chat
+          ARRANGED_TEST_MODEL_HAS_CHAT_TEMPLATE: "1"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: vsix-${{ matrix.target }}-${{ matrix.variant }}
+          path: build/*.vsix
+          if-no-files-found: error

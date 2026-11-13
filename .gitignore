@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build/
+runtime/
+.test-work/
+.venv/
+docs/_build/
+*.vsix
+.DS_Store
