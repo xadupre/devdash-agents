@@ -2901,6 +2901,7 @@ function settingsSender(dom: JSDOM) {
     cliPath: "copilot",
     localWorkerPath: "devdash-genai-worker",
     requestTimeoutMinutes: 60,
+    workerIdleMinutes: 30,
     approvedUrlOrigins: [],
     copilotModel: "",
     copilotModelsStatus: "idle",
@@ -5393,5 +5394,65 @@ test("a saved remote machine gets a one-click Copilot worker and explained place
   assert.match(
     document.querySelector("#worker-kind-hint")!.textContent!,
     /Copilot CLI \(\/opt\/copilot\) runs on GPU \(remote\)/,
+  );
+});
+
+test("the worker table lists running workers and stops idle ones on demand", async (t) => {
+  const { dom, document, posted } = await setup(t);
+  const send = (models: object[]): void => {
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent("message", {
+        data: { type: "local-models", models },
+      }),
+    );
+  };
+  const base = {
+    modelPath: "/models/qwen",
+    name: "Qwen",
+    placement: { provider: "cuda", deviceId: 1 },
+    device: { provider: "cuda", deviceId: 1, name: "GPU" },
+    status: "ready",
+    sessions: [{ repositoryId: "repo", cacheTokens: 0 }],
+  };
+  send([
+    {
+      ...base,
+      id: "idle",
+      busy: false,
+      workerName: "Qwen CUDA",
+      machineName: "GPU host",
+      idleStopAt: new Date(2026, 0, 1, 14, 5).getTime(),
+    },
+    { ...base, id: "busy", busy: true, workerName: "Busy", machineName: "X" },
+    { ...base, id: "off", busy: false, status: "unloaded", device: undefined },
+  ]);
+  const rows = [
+    ...document.querySelectorAll<HTMLTableRowElement>("#worker-table tbody tr"),
+  ];
+  assert.equal(rows.length, 2, "stopped workers are not listed");
+  const cells = [...rows[0]!.cells].map((cell) => cell.textContent);
+  assert.deepEqual(cells.slice(0, 6), [
+    "Qwen CUDA",
+    "GPU host",
+    "Qwen",
+    "CUDA 1",
+    "ready",
+    "1",
+  ]);
+  assert.equal(
+    cells[6],
+    `at ${new Date(2026, 0, 1, 14, 5).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+  );
+  assert.equal(rows[1]!.cells[6]!.textContent, "not while running");
+  assert.equal(rows[1]!.querySelector("button")!.disabled, true);
+  rows[0]!.querySelector("button")!.click();
+  assert.deepEqual(posted.at(-1), {
+    type: "stop-local-worker",
+    hostId: "idle",
+  });
+  send([]);
+  assert.equal(
+    document.querySelector<HTMLElement>("#worker-table-empty")!.hidden,
+    false,
   );
 });

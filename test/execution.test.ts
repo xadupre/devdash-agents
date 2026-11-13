@@ -588,3 +588,15 @@ test(
     assert.equal(output.diffSource.type, "working-tree");
   },
 );
+
+test("stop-local-worker messages name one host", () => {
+  assert.deepEqual(
+    parseApplicationMessage({ type: "stop-local-worker", hostId: "h-1" }),
+    { type: "stop-local-worker", hostId: "h-1" },
+  );
+  assert.throws(
+    () =>
+      parseApplicationMessage({ type: "stop-local-worker", hostId: "../x" }),
+    /local model host/,
+  );
+});

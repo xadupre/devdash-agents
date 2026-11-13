@@ -277,6 +277,13 @@ export function renderApplication(resources: {
     <section id="sessions-view" aria-label="Local model sessions" hidden>
       <h2>Sessions</h2>
       <p class="repository-hint">Local models are shared across repositories. Each session has a separate KV cache. KV size is an estimate; runtime allocator overhead may be higher.</p>
+      <h3 id="worker-table-title">Running workers</h3>
+      <table id="worker-table" aria-labelledby="worker-table-title">
+        <thead><tr><th scope="col">Worker</th><th scope="col">Machine</th><th scope="col">Model</th><th scope="col">Device</th><th scope="col">Status</th><th scope="col">Sessions</th><th scope="col">Auto-stop</th><th scope="col">Actions</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="worker-table-empty">No local model worker is running.</p>
+      <p class="repository-hint">Stop frees a worker's memory now; its sessions stay open and reload the model on their next request. Idle workers stop automatically after the delay set in Settings.</p>
       <div id="local-models"><p>No local model is loaded.</p></div>
     </section>
     <section id="dataset-view" aria-label="Session dataset" hidden>
@@ -404,6 +411,9 @@ export function renderApplication(resources: {
         <label for="request-timeout-minutes">Request timeout (minutes)</label>
         <input id="request-timeout-minutes" type="number" value="60" min="1" max="35791" step="1" required>
         <p class="repository-hint">Applies to subsequent Copilot operations, including in existing sessions. Running operations keep their deadline.</p>
+        <label for="worker-idle-minutes">Stop idle local model workers after (minutes, 0 = never)</label>
+        <input id="worker-idle-minutes" type="number" value="30" min="0" max="10080" step="1" required>
+        <p class="repository-hint">Frees the model's memory when no request has run for this long. Sessions stay open and reload the model on their next request; KV caches are lost.</p>
         <label for="approved-url-origins">Approved URL origins (one per line)</label>
         <textarea id="approved-url-origins" rows="3" placeholder="https://example.com"></textarea>
         <p class="repository-hint">These HTTP or HTTPS roots may be read without asking again across repositories. Remove a root to require approval again. GitHub file reads remain automatically approved.</p>

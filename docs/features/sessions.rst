@@ -5,11 +5,11 @@ Every repository can have multiple Copilot and local sessions open at the same
 time. Each has its own transcript and draft; switching sessions never merges model
 context. Sessions start lazily and continue independently while another session
 is displayed. Selecting a repository only displays its current view and draft;
-use **Add** to open an independent session in two steps: first the agent and
-its model (a configured worker; the list shows where it runs), then the machine
-where files are edited and commands run, with the repository path on that
-machine. The second step is skipped for Copilot workers and when only one
-machine is configured.
+use **Add** to open an independent session. A single list shows every valid
+pair *agent and model → machine for files and commands*, grouped by worker.
+Each group header names the worker's model, device and the machine running it;
+each entry shows the repository path on the machine where files are edited and
+commands run. Copilot workers only pair with their own machine.
 The **Session** dropdown lists all open sessions in the selected repository.
 **Close** stops only the selected session, leaving its transcript available.
 **Resume** lists the repository's saved Copilot sessions,
@@ -83,6 +83,15 @@ KV caches. No model or cache is written to disk. A local session stays visible,
 but cannot generate until CUDA, NPU or CPU is selected in the Sessions panel;
 that selection starts a fresh worker and the conversation's prompt is evaluated
 again to rebuild its cache.
+
+The **Running workers** table at the top of the Sessions panel lists each
+loaded worker with its machine, model, device, status, session count and
+automatic stop time. **Stop** stops the worker process and frees its memory
+immediately; its sessions stay open, and their next request reloads the model
+and rebuilds the cache. Idle workers stop automatically after
+``devdashAgents.workerIdleMinutes`` (30 by default; 0 never stops them). A
+worker never stops while a request is running; the delay restarts after each
+request. Copilot CLI processes are not affected.
 
 Use **Add**, then a native worker, to open another independent local conversation for the
 same repository. Each new session saves its chosen worker and execution machine;

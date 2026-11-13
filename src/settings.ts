@@ -11,8 +11,12 @@ export interface HarnessSettings {
   cliPath: string;
   localWorkerPath: string;
   requestTimeoutMinutes: number;
+  /** Minutes without activity before a local model worker stops; 0 disables. */
+  workerIdleMinutes: number;
   approvedUrlOrigins: string[];
 }
+
+export const MAX_WORKER_IDLE_MINUTES = 10080;
 
 export function parseHarnessSettings(value: unknown): HarnessSettings {
   if (!value || typeof value !== "object")
@@ -21,6 +25,7 @@ export function parseHarnessSettings(value: unknown): HarnessSettings {
     cliPath,
     localWorkerPath,
     requestTimeoutMinutes,
+    workerIdleMinutes,
     approvedUrlOrigins,
   } = value as HarnessSettings;
   for (const path of [cliPath, localWorkerPath]) {
@@ -39,6 +44,15 @@ export function parseHarnessSettings(value: unknown): HarnessSettings {
     throw new Error("Invalid harness request timeout.");
   requestTimeoutMs(requestTimeoutMinutes);
   if (
+    typeof workerIdleMinutes !== "number" ||
+    !Number.isSafeInteger(workerIdleMinutes) ||
+    workerIdleMinutes < 0 ||
+    workerIdleMinutes > MAX_WORKER_IDLE_MINUTES
+  )
+    throw new Error(
+      `Set the worker idle timeout to a whole number of minutes between 0 and ${MAX_WORKER_IDLE_MINUTES}.`,
+    );
+  if (
     !Array.isArray(approvedUrlOrigins) ||
     approvedUrlOrigins.some(
       (origin) => typeof origin !== "string" || urlOrigin(origin) !== origin,
@@ -51,6 +65,7 @@ export function parseHarnessSettings(value: unknown): HarnessSettings {
     cliPath,
     localWorkerPath,
     requestTimeoutMinutes,
+    workerIdleMinutes,
     approvedUrlOrigins: [...new Set(approvedUrlOrigins)],
   };
 }
@@ -64,6 +79,7 @@ export function parseHarnessSettingsPatch(
     cliPath: "copilot",
     localWorkerPath: "devdash-genai-worker",
     requestTimeoutMinutes: 60,
+    workerIdleMinutes: 30,
     approvedUrlOrigins: [],
     ...value,
   });
@@ -73,6 +89,8 @@ export function parseHarnessSettingsPatch(
     patch.localWorkerPath = parsed.localWorkerPath;
   if (Object.hasOwn(value, "requestTimeoutMinutes"))
     patch.requestTimeoutMinutes = parsed.requestTimeoutMinutes;
+  if (Object.hasOwn(value, "workerIdleMinutes"))
+    patch.workerIdleMinutes = parsed.workerIdleMinutes;
   if (Object.hasOwn(value, "approvedUrlOrigins"))
     patch.approvedUrlOrigins = parsed.approvedUrlOrigins;
   if (!Object.keys(patch).length)

@@ -37,6 +37,11 @@ export interface LocalModelSnapshot {
   device?: LocalDevice;
   error?: string;
   busy: boolean;
+  /** Set by the extension: configured worker and the machine running it. */
+  workerName?: string;
+  machineName?: string;
+  /** Epoch milliseconds when the idle worker process will be stopped. */
+  idleStopAt?: number;
   sessions: LocalModelSession[];
 }
 
@@ -75,6 +80,8 @@ export class LocalModelHost {
   private cancelWhenUnused = false;
   private stoppingWorker?: LocalModelWorker;
   private pendingPlacements = 0;
+  private idleTimer?: ReturnType<typeof setTimeout>;
+  private idleStopAt?: number;
 
   constructor(
     readonly modelPath: string,
@@ -86,6 +93,8 @@ export class LocalModelHost {
       LocalModelSnapshot,
       "name" | "contextLength" | "sizeBytes" | "bytesPerToken" | "sharedBuffer"
     >,
+    /** Milliseconds without activity before the worker process stops; 0 disables. */
+    private readonly idleTimeoutMs: () => number = () => 0,
   ) {
     if (placement.provider === "disk") this.status = "disk";
   }
@@ -114,6 +123,7 @@ export class LocalModelHost {
       device: this.device,
       error: this.error,
       busy: this.active > 0,
+      ...(this.idleStopAt === undefined ? {} : { idleStopAt: this.idleStopAt }),
       sessions: [...this.sessions.values()].map((session) => ({ ...session })),
     };
   }
@@ -287,6 +297,20 @@ export class LocalModelHost {
     return this.waitForSignal(promise, signal);
   }
 
+  /**
+   * Stops the worker process and frees its memory. Sessions stay attached and
+   * their next request reloads the model; only KV caches are lost.
+   */
+  async stop(): Promise<void> {
+    await this.enqueue(async () => {
+      if (this.status === "disk") return;
+      await this.unload();
+      this.clearCaches();
+      this.status = "unloaded";
+      this.error = undefined;
+    });
+  }
+
   async release(sessionId: string): Promise<void> {
     await this.enqueue(async () => {
       const session = this.sessions.get(sessionId);
@@ -319,6 +343,7 @@ export class LocalModelHost {
       this.cancelWhenUnused = cancelWhenUnused;
       const worker = this.createWorker((error) => {
         if (this.worker !== worker || this.stoppingWorker === worker) return;
+        this.cancelIdleStop();
         this.worker = undefined;
         this.device = undefined;
         this.status = "error";
@@ -349,6 +374,7 @@ export class LocalModelHost {
   }
 
   private async unload(): Promise<void> {
+    this.cancelIdleStop();
     const worker = this.worker;
     if (!worker) {
       this.device = undefined;
@@ -371,8 +397,28 @@ export class LocalModelHost {
     }
   }
 
+  private cancelIdleStop(): void {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = undefined;
+    this.idleStopAt = undefined;
+  }
+
+  private scheduleIdleStop(): void {
+    this.cancelIdleStop();
+    const timeout = this.idleTimeoutMs();
+    if (this.active || this.status !== "ready" || !(timeout > 0)) return;
+    this.idleStopAt = Date.now() + timeout;
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = undefined;
+      if (this.active || this.status !== "ready") return;
+      void this.stop().catch(() => {});
+    }, timeout);
+    this.idleTimer.unref?.();
+  }
+
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
     this.active++;
+    this.cancelIdleStop();
     this.onChange();
     const result = this.tail.then(operation, operation);
     this.tail = result.then(
@@ -381,6 +427,7 @@ export class LocalModelHost {
     );
     return result.finally(() => {
       this.active--;
+      this.scheduleIdleStop();
       this.onChange();
     });
   }

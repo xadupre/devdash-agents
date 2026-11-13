@@ -573,6 +573,7 @@ declare function acquireVsCodeApi(): {
     "request-timeout-minutes",
     HTMLInputElement,
   );
+  const workerIdleMinutes = element("worker-idle-minutes", HTMLInputElement);
   const approvedUrlOrigins = element(
     "approved-url-origins",
     HTMLTextAreaElement,
@@ -587,6 +588,7 @@ declare function acquireVsCodeApi(): {
     "cli-path": "cliPath",
     "local-worker-path": "localWorkerPath",
     "request-timeout-minutes": "requestTimeoutMinutes",
+    "worker-idle-minutes": "workerIdleMinutes",
     "approved-url-origins": "approvedUrlOrigins",
   };
   const dirtyHarnessFields = new Map<HarnessSettingKey, number>();
@@ -633,6 +635,8 @@ declare function acquireVsCodeApi(): {
       settings.localWorkerPath = localWorkerPath.value;
     if (dirty.has("requestTimeoutMinutes"))
       settings.requestTimeoutMinutes = requestTimeoutMinutes.valueAsNumber;
+    if (dirty.has("workerIdleMinutes"))
+      settings.workerIdleMinutes = workerIdleMinutes.valueAsNumber;
     if (dirty.has("approvedUrlOrigins"))
       settings.approvedUrlOrigins = approvedUrlOrigins.value
         .split(/\r?\n/)
@@ -1291,6 +1295,8 @@ declare function acquireVsCodeApi(): {
         localWorkerPath.value = settings.localWorkerPath;
       if (!dirtyHarnessFields.has("requestTimeoutMinutes"))
         requestTimeoutMinutes.value = String(settings.requestTimeoutMinutes);
+      if (!dirtyHarnessFields.has("workerIdleMinutes"))
+        workerIdleMinutes.value = String(settings.workerIdleMinutes);
       if (!dirtyHarnessFields.has("approvedUrlOrigins"))
         approvedUrlOrigins.value = settings.approvedUrlOrigins.join("\n");
     }
@@ -1722,7 +1728,67 @@ declare function acquireVsCodeApi(): {
       : statusLabels[status];
   }
 
+  function renderWorkerTable(): void {
+    const body = document.querySelector<HTMLTableSectionElement>(
+      "#worker-table tbody",
+    )!;
+    const focused =
+      document.activeElement instanceof HTMLButtonElement &&
+      body.contains(document.activeElement)
+        ? document.activeElement.dataset.hostId
+        : undefined;
+    const running = localModels.filter(
+      (model) => model.status !== "disk" && model.status !== "unloaded",
+    );
+    element("worker-table", HTMLTableElement).hidden = !running.length;
+    element("worker-table-empty", HTMLElement).hidden = !!running.length;
+    body.replaceChildren(
+      ...running.map((model) => {
+        const row = document.createElement("tr");
+        for (const text of [
+          model.workerName ?? "Legacy local model",
+          model.machineName ?? "This computer",
+          model.name ?? model.modelPath,
+          model.device
+            ? `${model.device.provider.toUpperCase()} ${model.device.deviceId}`
+            : model.placement.provider.toUpperCase(),
+          model.busy ? "running a request" : model.status,
+          String(model.sessions.length),
+          model.busy
+            ? "not while running"
+            : model.idleStopAt === undefined
+              ? "never"
+              : `at ${new Date(model.idleStopAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+        ]) {
+          const cell = document.createElement("td");
+          cell.textContent = text;
+          row.append(cell);
+        }
+        const actions = document.createElement("td");
+        const stop = document.createElement("button");
+        stop.type = "button";
+        stop.textContent = "Stop";
+        stop.dataset.hostId = model.id ?? "";
+        stop.title = model.busy
+          ? "Wait for the running request to finish"
+          : "Stop this worker and free its memory; sessions reload it when needed";
+        stop.disabled = !model.id || model.busy || model.status === "loading";
+        stop.addEventListener("click", () =>
+          vscode.postMessage({ type: "stop-local-worker", hostId: model.id! }),
+        );
+        actions.append(stop);
+        row.append(actions);
+        return row;
+      }),
+    );
+    if (focused)
+      [...body.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.dataset.hostId === focused)
+        ?.focus();
+  }
+
   function renderLocalModels(): void {
+    renderWorkerTable();
     const focused =
       document.activeElement instanceof HTMLButtonElement &&
       localModelsContainer.contains(document.activeElement)

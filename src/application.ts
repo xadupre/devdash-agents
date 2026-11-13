@@ -262,6 +262,7 @@ export type ApplicationMessage =
   | { type: "worker-foundry-models"; requestId: string; device: "cpu" | "gpu" }
   | { type: "foundry-download"; id: string }
   | { type: "local-device"; provider: LocalProvider; deviceId: number }
+  | { type: "stop-local-worker"; hostId: string }
   | {
       type: "local-placement";
       modelPath: string;
@@ -441,6 +442,12 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
       throw new Error("Invalid local inference device.");
     }
     return { type: "local-device", provider, deviceId };
+  }
+  if (value.type === "stop-local-worker") {
+    const hostId = "hostId" in value ? value.hostId : undefined;
+    if (typeof hostId !== "string" || !/^[\w-]{1,100}$/.test(hostId))
+      throw new Error("Invalid local model host.");
+    return { type: "stop-local-worker", hostId };
   }
   if (value.type === "local-placement") {
     const modelPath = "modelPath" in value ? value.modelPath : undefined;

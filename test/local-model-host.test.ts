@@ -732,3 +732,59 @@ test("automatic device selection omits deviceId when loading", async () => {
     { path: "/model", provider: "auto", deviceId: undefined },
   ]);
 });
+
+test("idle workers stop after the timeout, busy ones never, and Stop frees memory on demand", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const workers: Worker[] = [];
+  let timeout = 1000;
+  const host = new LocalModelHost(
+    "/model",
+    { provider: "cpu", deviceId: 0 },
+    () => {
+      workers.push(new Worker());
+      return workers.at(-1)!;
+    },
+    () => {},
+    () => {},
+    undefined,
+    () => timeout,
+  );
+  const session = host.attach("repo", "s");
+  const flush = async (): Promise<void> => {
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+  };
+  await session.generateChat([], () => {}, undefined, 64);
+  assert.equal(host.snapshot().idleStopAt, Date.now() + 1000);
+  t.mock.timers.tick(999);
+  await flush();
+  assert.equal(host.currentStatus, "ready");
+
+  const gate = deferred();
+  workers[0]!.nextGeneration = () => gate.promise;
+  const running = session.generateChat([], () => {}, undefined, 64);
+  await flush();
+  assert.equal(host.snapshot().idleStopAt, undefined);
+  t.mock.timers.tick(5000);
+  await flush();
+  assert.equal(host.currentStatus, "ready", "never stops during a request");
+  workers[0]!.nextGeneration = undefined;
+  gate.resolve();
+  await running;
+  t.mock.timers.tick(1000);
+  await flush();
+  assert.equal(host.currentStatus, "unloaded");
+  assert.equal(workers[0]!.stops, 1);
+  assert.equal(host.snapshot().sessions[0]!.cacheTokens, 0);
+  assert.equal(host.snapshot().idleStopAt, undefined);
+
+  await session.generateChat([], () => {}, undefined, 64);
+  assert.equal(workers.length, 2, "the next request reloads the model");
+  await host.stop();
+  assert.equal(host.currentStatus, "unloaded");
+  assert.equal(workers[1]!.stops, 1);
+
+  timeout = 0;
+  await session.generateChat([], () => {}, undefined, 64);
+  assert.equal(host.snapshot().idleStopAt, undefined, "0 disables the timeout");
+  await session.stop();
+});

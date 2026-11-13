@@ -211,6 +211,14 @@ The choice is saved in ``devdashAgents.localProvider`` and
 model load. Move a loaded shared model between devices, or unload it to DISK,
 in the **Sessions** panel; moving or unloading discards all local KV caches.
 
+Idle worker timeout
+-------------------
+
+``devdashAgents.workerIdleMinutes`` (Settings panel: **Stop idle local model
+workers after**) stops a local model worker after this many minutes without a
+running request, freeing its memory. It defaults to 30; 0 disables it. Sessions
+stay open and reload the model on their next request; KV caches are lost.
+
 Request timeout
 ---------------
 

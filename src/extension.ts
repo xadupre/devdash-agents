@@ -45,7 +45,10 @@ import {
   type FoundryCatalog,
   type FoundryDevice,
 } from "./foundry";
-import { reconcileApprovedUrlOrigins } from "./settings";
+import {
+  MAX_WORKER_IDLE_MINUTES,
+  reconcileApprovedUrlOrigins,
+} from "./settings";
 import { LocalConversation } from "./local-conversation";
 import {
   findLocalModelHost,
@@ -134,6 +137,16 @@ export function activate(context: vscode.ExtensionContext): void {
           .getConfiguration("devdashAgents")
           .get("requestTimeoutMinutes"),
       );
+    const workerIdleMinutes = (): number => {
+      const minutes = vscode.workspace
+        .getConfiguration("devdashAgents")
+        .get<number>("workerIdleMinutes", 30);
+      return Number.isSafeInteger(minutes) &&
+        minutes >= 0 &&
+        minutes <= MAX_WORKER_IDLE_MINUTES
+        ? minutes
+        : 30;
+    };
     const executionConfiguration = (): ExecutionConfiguration => {
       const settings = configuration();
       const configured = settings.get<unknown>("execution");
@@ -237,57 +250,50 @@ export function activate(context: vscode.ExtensionContext): void {
         "model-id": "Hugging Face",
         foundry: "Foundry",
       };
-      const picked = await vscode.window.showQuickPick(
-        workers.map((worker) => ({
-          label: worker.name,
-          description:
-            worker.backend === "copilot"
-              ? `Copilot · ${worker.model.source || "CLI default model"}`
-              : `Local model · ${kinds[worker.model.kind]}: ${worker.model.source} · ${worker.provider === "cuda" ? `CUDA ${worker.deviceId}` : "CPU"}`,
-          detail:
-            worker.backend === "copilot"
-              ? `Copilot runs on ${machineOf(worker.machineId)} and edits files and runs commands there.`
-              : `The model runs on ${machineOf(worker.machineId)}. Next, choose where files are edited and commands run.`,
-          worker,
-        })),
+      type Choice = vscode.QuickPickItem & {
+        worker?: WorkerConfiguration;
+        machine?: MachineConfiguration;
+      };
+      const choices: Choice[] = workers.flatMap((worker) => [
         {
-          title: "New session - step 1: agent and model",
-          placeHolder:
-            "Choose who answers. Workers (one model each) are configured in Settings > Workers.",
-          matchOnDescription: true,
-          ignoreFocusOut: true,
+          label:
+            worker.backend === "copilot"
+              ? `${worker.name} - Copilot · ${worker.model.source || "CLI default model"}`
+              : `${worker.name} - ${kinds[worker.model.kind]}: ${worker.model.source} · ${worker.provider === "cuda" ? `CUDA ${worker.deviceId}` : "CPU"} on ${machineOf(worker.machineId)}`,
+          kind: vscode.QuickPickItemKind.Separator,
         },
-      );
-      if (!picked) return undefined;
-      const machines = config.machines.filter(
-        (machine) =>
-          picked.worker.backend !== "copilot" ||
-          machine.id === picked.worker.machineId,
-      );
-      const machine =
-        machines.length === 1
-          ? { machine: machines[0]! }
-          : await vscode.window.showQuickPick(
-              machines.map((machine) => ({
-                label: where(machine),
-                description:
-                  machine.id === picked.worker.machineId
-                    ? "same machine as the model"
-                    : `model stays on ${machineOf(picked.worker.machineId)}`,
-                detail: repositoryPath
-                  ? `Repository: ${machineRepositoryPath(machine, repositoryPath)}`
-                  : `Repositories directory: ${machine.repositoriesPath}`,
-                machine,
-              })),
-              {
-                title: "New session - step 2: machine for files and commands",
-                placeHolder: `Where should ${picked.worker.name} read and edit the repository and run commands?`,
-                matchOnDescription: true,
-                ignoreFocusOut: true,
-              },
-            );
-      if (!machine) return undefined;
-      return assignSession(config, picked.worker.id, machine.machine.id);
+        ...config.machines
+          .filter(
+            (machine) =>
+              worker.backend !== "copilot" || machine.id === worker.machineId,
+          )
+          .map((machine) => ({
+            label: `${worker.name}  →  ${where(machine)}`,
+            description:
+              worker.backend === "copilot"
+                ? "Copilot works on this machine"
+                : machine.id === worker.machineId
+                  ? "model and files on the same machine"
+                  : `model on ${machineOf(worker.machineId)}`,
+            detail: `Files edited and commands run on ${where(machine)}: ${
+              repositoryPath
+                ? machineRepositoryPath(machine, repositoryPath)
+                : machine.repositoriesPath
+            }`,
+            worker,
+            machine,
+          })),
+      ]);
+      const picked = await vscode.window.showQuickPick(choices, {
+        title: "New session: agent/model  →  machine for files and commands",
+        placeHolder:
+          "Each entry pairs an agent and its model (Settings > Workers) with the machine where the repository is edited and commands run",
+        matchOnDescription: true,
+        matchOnDetail: true,
+        ignoreFocusOut: true,
+      });
+      if (!picked?.worker || !picked.machine) return undefined;
+      return assignSession(config, picked.worker.id, picked.machine.id);
     };
     const copilotOptions = (
       repositoryPath: string,
@@ -447,12 +453,24 @@ export function activate(context: vscode.ExtensionContext): void {
           ),
         },
       });
+      const config = localHosts.size ? executionConfiguration() : undefined;
       void panel.webview.postMessage({
         type: "local-models",
-        models: [...localHosts].map(([id, host]) => ({
-          ...host.snapshot(),
-          id,
-        })),
+        models: [...localHosts].map(([id, host]) => {
+          const worker = config?.workers.find(
+            (entry) => entry.id === hostWorkers.get(host),
+          );
+          const machine = hostMachines.get(host) ?? "";
+          return {
+            ...host.snapshot(),
+            id,
+            ...(worker ? { workerName: worker.name } : {}),
+            machineName: machine
+              ? (config?.machines.find((entry) => entry.id === machine)?.name ??
+                machine)
+              : "This computer",
+          };
+        }),
       });
     };
     await application.refresh();
@@ -574,6 +592,7 @@ export function activate(context: vscode.ExtensionContext): void {
           "requestTimeoutMinutes",
           60,
         ),
+        workerIdleMinutes: workerIdleMinutes(),
         approvedUrlOrigins: settings.get<string[]>("approvedUrlOrigins", []),
         copilotModel: currentModel(),
         copilotModels,
@@ -747,6 +766,7 @@ export function activate(context: vscode.ExtensionContext): void {
           bytesPerToken: modelInfo.bytesPerToken,
           sharedBuffer: modelInfo.sharedBuffer,
         },
+        () => workerIdleMinutes() * 60_000,
       );
       localHosts.set(hostId, host);
       hostMachines.set(host, launch.machine);
@@ -1147,6 +1167,7 @@ export function activate(context: vscode.ExtensionContext): void {
             "cliPath",
             "localWorkerPath",
             "requestTimeoutMinutes",
+            "workerIdleMinutes",
             "approvedUrlOrigins",
             "remoteMachines",
             "remoteMachine",
@@ -1492,6 +1513,12 @@ export function activate(context: vscode.ExtensionContext): void {
                 message.view,
               );
               break;
+            case "stop-local-worker": {
+              const host = localHosts.get(message.hostId);
+              if (!host) throw new Error("The worker is no longer running.");
+              await host.stop();
+              break;
+            }
             case "local-placement": {
               const matches = [...localHosts.values()].filter(
                 (entry) => entry.modelPath === message.modelPath,
