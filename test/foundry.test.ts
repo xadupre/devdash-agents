@@ -407,3 +407,28 @@ fetch("http://127.0.0.1:${hub.port}" + url.pathname + url.search).then(async (re
     assert.equal(hub.requests.length, count);
   },
 );
+
+test("Foundry Local retries network failures and reports their cause", async (t) => {
+  const hub = await foundryServer(t);
+  let failures = 1;
+  const flaky: typeof fetch = (input, init) => {
+    if (failures-- > 0)
+      return Promise.reject(
+        new TypeError("fetch failed", {
+          cause: Object.assign(new Error("connect ECONNRESET 1.2.3.4:443"), {
+            code: "ECONNRESET",
+          }),
+        }),
+      );
+    return hub.fetch(input, init);
+  };
+  assert.equal(
+    (await listFoundryModels("cpu", { fetch: flaky })).models.length > 0,
+    true,
+  );
+  failures = 3;
+  await assert.rejects(
+    listFoundryModels("cpu", { fetch: flaky }),
+    /request to api\.catalog\.azureml\.ms failed after 3 attempts: fetch failed: ECONNRESET: connect ECONNRESET/,
+  );
+});

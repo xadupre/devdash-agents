@@ -27,6 +27,7 @@ const headers = {
   "x-ms-use-full-service-contracts": "true",
 };
 const MANIFEST = FOUNDRY_MANIFEST;
+const FETCH_ATTEMPTS = 3;
 
 /** Execution providers the native worker can run, by Foundry provider name. */
 const PROVIDERS: Record<string, Exclude<LocalProvider, "auto">> = {
@@ -178,11 +179,37 @@ async function request(
   init: RequestInit,
   options: FoundryOptions,
 ): Promise<Response> {
-  const response = await (options.fetch ?? fetch)(url, {
-    ...init,
-    signal: options.signal,
-    redirect: "error",
-  });
+  let response: Response | undefined;
+  for (let attempt = 1; !response; attempt++) {
+    try {
+      response = await (options.fetch ?? fetch)(url, {
+        ...init,
+        signal: options.signal,
+        redirect: "error",
+      });
+    } catch (error) {
+      options.signal?.throwIfAborted();
+      // Node reports network failures as "fetch failed"; the cause says why.
+      const cause =
+        error instanceof Error && error.cause instanceof Error
+          ? error.cause
+          : undefined;
+      const detail = [
+        error instanceof Error ? error.message : String(error),
+        cause && "code" in cause ? String(cause.code) : undefined,
+        cause?.message,
+      ]
+        .filter(Boolean)
+        .join(": ")
+        .replace(/[?&]sig=[^\s&]*/g, "?sig=…");
+      if (attempt >= FETCH_ATTEMPTS)
+        throw new Error(
+          `Foundry Local request to ${new URL(url).host} failed after ${attempt} attempts: ${detail}`,
+          { cause: error },
+        );
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+    }
+  }
   if (!response.ok) {
     await response.body?.cancel();
     // Signed blob URLs are credentials and must never appear in error messages.
