@@ -572,46 +572,74 @@ test(
 );
 
 test(
-  "missing remote repositories fail before model loading despite SSH statistics",
+  "remote repository errors identify the harness and explain how to fix its path",
   { skip: process.platform === "win32" },
   async (t) => {
     const root = await directory(t);
-    const repository = join(root, "missing");
-    let loads = 0;
-    const conversation = new LocalConversation(
-      {
-        load: async () => {
-          loads++;
-          return { provider: "cpu", deviceId: 0, name: "CPU" };
-        },
-        stop: async () => {},
-        generateChat: async () => {},
-      },
-      "/model",
-      "cpu",
-      0,
-      {
-        repositoryPath: repository,
-        remote: {
-          name: "tools",
-          command: `sh -c '"$0" "$@"; printf "\\nBytes per second: sent 12343.4, received 9184.6\\n" >&2' ${connection}`,
-        },
-        requestPermission: async () => true,
-      },
-    );
-    t.after(() => conversation.dispose());
-    await assert.rejects(
-      conversation.start(AbortSignal.timeout(10_000)),
-      (error: unknown) => {
-        assert.ok(error instanceof Error);
-        assert.equal(
-          error.message,
-          `Cannot open repository directory "${repository}" on tools. Check the harness machine repositories path and that the repository is cloned there.`,
+    const file = join(root, "not-a-directory");
+    await writeFile(file, "");
+    const inaccessible = join(root, "inaccessible");
+    await mkdir(inaccessible);
+    await chmod(inaccessible, 0o000);
+    const cases: [string, RegExp][] = [
+      [join(root, "missing"), /does not exist or is inaccessible/],
+      [file, /exists but is not a directory/],
+    ];
+    if (process.getuid?.() !== 0)
+      cases.push([inaccessible, /cannot be opened; check its permissions/]);
+    try {
+      for (const [repository, reason] of cases) {
+        let loads = 0;
+        const conversation = new LocalConversation(
+          {
+            load: async () => {
+              loads++;
+              return { provider: "cpu", deviceId: 0, name: "CPU" };
+            },
+            stop: async () => {},
+            generateChat: async () => {},
+          },
+          "/model",
+          "cpu",
+          0,
+          {
+            repositoryPath: repository,
+            remote: {
+              name: "tools",
+              command: `sh -c '"$0" "$@"; printf "\\nBytes per second: sent 12343.4, received 9184.6\\n" >&2' ${connection}`,
+            },
+            requestPermission: async () => true,
+          },
         );
-        return true;
-      },
-    );
-    assert.equal(loads, 0);
+        t.after(() => conversation.dispose());
+        await assert.rejects(
+          conversation.start(AbortSignal.timeout(10_000)),
+          (error: unknown) => {
+            assert.ok(error instanceof Error);
+            assert.ok(error.message.includes(repository));
+            assert.match(error.message, /harness machine "tools"/);
+            assert.match(error.message, reason);
+            assert.match(
+              error.message,
+              /harness runs repository commands.*worker machine/,
+            );
+            assert.match(
+              error.message,
+              /does not clone repositories automatically/,
+            );
+            assert.match(error.message, /Settings > Machines/);
+            assert.match(error.message, /Repositories directory/);
+            assert.match(error.message, /parent folder of an existing clone/);
+            assert.match(error.message, /create a new session/);
+            assert.doesNotMatch(error.message, /Bytes per second/);
+            return true;
+          },
+        );
+        assert.equal(loads, 0);
+      }
+    } finally {
+      await chmod(inaccessible, 0o700);
+    }
   },
 );
 

@@ -180,7 +180,16 @@ export class LocalConversation implements Conversation {
           const result = await runRemoteScript(
             this.tools.remote,
             `cd -- "$1" || {
-  printf '${REMOTE_ERROR_PREFIX}Cannot open repository directory "%s" on %s. Check the harness machine repositories path and that the repository is cloned there.\\n' "$1" "$2" >&2
+  if [ -e "$1" ] || [ -L "$1" ]; then
+    if [ -d "$1" ]; then
+      reason="cannot be opened; check its permissions"
+    else
+      reason="exists but is not a directory"
+    fi
+  else
+    reason="does not exist or is inaccessible"
+  fi
+  printf '${REMOTE_ERROR_PREFIX}Cannot start the session: repository directory "%s" on harness machine "%s" %s. The harness runs repository commands and may differ from the worker machine; DevDash does not clone repositories automatically. Ensure a clone is accessible at this path, or in Settings > Machines select the harness machine and set "Repositories directory (absolute path)" to the parent folder of an existing clone. Save and create a new session, or choose another harness machine; the worker can stay unchanged.\\n' "$1" "$2" "$reason" >&2
   exit 2
 }
 for entry in ./* ./.[!.]* ./..?*; do
