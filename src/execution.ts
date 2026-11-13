@@ -98,27 +98,65 @@ export function parseMachine(value: unknown): MachineConfiguration {
 
 export function parseWorker(value: unknown): WorkerConfiguration {
   const entry = record(value);
+  const label = `worker ${JSON.stringify(
+    typeof entry.name === "string" && entry.name
+      ? entry.name
+      : typeof entry.id === "string"
+        ? entry.id
+        : "",
+  )}`;
+  const fail = (message: string): never => {
+    throw new Error(`Invalid ${label}: ${message}`);
+  };
   const model = record(entry.model);
   const backend = entry.backend;
   const kind = model.kind;
-  const source = text(model.source, "model source", backend === "copilot");
+  if (backend !== "copilot" && backend !== "local")
+    return fail(`unknown backend ${JSON.stringify(backend)}.`);
   if (
-    (backend !== "copilot" && backend !== "local") ||
-    (kind !== "copilot" &&
-      kind !== "file" &&
-      kind !== "checkpoint" &&
-      kind !== "model-id" &&
-      kind !== "foundry") ||
-    (backend === "copilot") !== (kind === "copilot") ||
-    (kind === "copilot" && !isCopilotModelId(source)) ||
-    (kind === "model-id" && !isTransformersModelId(source)) ||
-    (kind === "foundry" && !isFoundryModelId(source)) ||
-    (entry.provider !== "cpu" && entry.provider !== "cuda") ||
+    kind !== "copilot" &&
+    kind !== "file" &&
+    kind !== "checkpoint" &&
+    kind !== "model-id" &&
+    kind !== "foundry"
+  )
+    return fail(`unknown model source type ${JSON.stringify(kind)}.`);
+  if ((backend === "copilot") !== (kind === "copilot"))
+    return fail("only Copilot workers can use a Copilot model ID.");
+  let source: string;
+  try {
+    source = text(model.source, "model source", backend === "copilot");
+  } catch {
+    return fail(
+      backend === "copilot"
+        ? "the Copilot model ID must not have surrounding spaces or control characters."
+        : "enter a model path or ID without surrounding spaces or control characters.",
+    );
+  }
+  if (kind === "copilot" && !isCopilotModelId(source))
+    return fail(
+      `${JSON.stringify(source)} is not a Copilot model ID (printable ASCII without spaces).`,
+    );
+  if (kind === "model-id" && !isTransformersModelId(source))
+    return fail(
+      `${JSON.stringify(source)} is not a Hugging Face model ID; expected "name" or "owner/name". Use the checkpoint source for a local path.`,
+    );
+  if (kind === "foundry" && !isFoundryModelId(source))
+    return fail(
+      `${JSON.stringify(source)} is not a Foundry catalogue model ID; expected "azureml://registries/<registry>/models/<name>/versions/<n>". Pick a suggestion after listing Foundry models.`,
+    );
+  if (entry.provider !== "cpu" && entry.provider !== "cuda")
+    return fail(
+      `device must be CPU or CUDA, not ${JSON.stringify(entry.provider)}.`,
+    );
+  if (
     typeof entry.deviceId !== "number" ||
     !Number.isSafeInteger(entry.deviceId) ||
     entry.deviceId < 0
   )
-    throw new Error("Invalid worker model or CPU/CUDA device.");
+    return fail(
+      `device index must be a non-negative integer, not ${JSON.stringify(entry.deviceId)}.`,
+    );
   return {
     id: identifier(entry.id),
     name: text(entry.name, "worker name"),

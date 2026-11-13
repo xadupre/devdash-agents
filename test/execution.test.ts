@@ -141,20 +141,29 @@ test("invalid machine, worker and persisted assignments fail explicitly", () => 
     [local, { ...remote, command: 'ssh "unterminated' }],
   ])
     assert.throws(() => parseExecutionConfiguration({ ...config, machines }));
-  for (const patch of [
-    { machineId: "unknown" },
-    { deviceId: -1 },
-    { deviceId: 0.5 },
-    { provider: "other" },
-    { model: { kind: "model-id", source: "--help" } },
-    { model: { kind: "copilot", source: "fixture" } },
-    { model: { kind: "file", source: "" } },
-  ])
-    assert.throws(() =>
-      parseExecutionConfiguration({
-        ...config,
-        workers: [{ ...worker, ...patch }],
-      }),
+  for (const [patch, message] of [
+    [{ machineId: "unknown" }, /Unknown machine for worker Qwen CUDA/],
+    [{ deviceId: -1 }, /"Qwen CUDA": device index .* not -1/],
+    [{ deviceId: 0.5 }, /device index .* not 0\.5/],
+    [{ provider: "other" }, /"Qwen CUDA": device must be CPU or CUDA/],
+    [
+      { model: { kind: "model-id", source: "--help" } },
+      /"--help" is not a Hugging Face model ID/,
+    ],
+    [
+      { model: { kind: "foundry", source: "Phi-4-mini" } },
+      /"Phi-4-mini" is not a Foundry catalogue model ID; expected "azureml:/,
+    ],
+    [{ model: { kind: "copilot", source: "fixture" } }, /only Copilot workers/],
+    [{ model: { kind: "file", source: "" } }, /enter a model path or ID/],
+  ] as const)
+    assert.throws(
+      () =>
+        parseExecutionConfiguration({
+          ...config,
+          workers: [{ ...worker, ...patch }],
+        }),
+      message,
     );
   const assignment = assignSession(config, "inference", "local");
   assert.throws(
