@@ -5,14 +5,15 @@ Every repository can have multiple Copilot and local sessions open at the same
 time. Each has its own transcript and draft; switching sessions never merges model
 context. Sessions start lazily and continue independently while another session
 is displayed. Selecting a repository only displays its current view and draft;
-use **Add** and choose **Copilot** or **Local** to open an independent session.
+use **Add**, choose a configured worker, then its execution machine to open an independent session.
 The **Session** dropdown lists all open sessions in the selected repository.
 **Close** stops only the selected session, leaving its transcript available.
 **Resume** lists the repository's saved Copilot sessions,
 including ones started from the Copilot CLI, and resumes the chosen one; a
 session started outside DevDash Agents keeps its model context but its earlier
 messages are not shown. **New** closes and archives the selected conversation
-and replaces it with a fresh session of the same type; other sessions remain open.
+and replaces it with a fresh session using the same worker and machine assignment;
+other sessions remain open. Session labels show the worker and command machine.
 Model and device selection stays in the Settings tab, not in this toolbar.
 
 The compact colored timing band in the bottom message-action row shows generation
@@ -46,8 +47,9 @@ the same parent directory restores the interface without starting Copilot.
 Local inference
 ---------------
 
-**Add**, then **Local**, uses the local ONNX Runtime GenAI model directory chosen
-in the settings panel (see :doc:`settings`); choose one there first. Native release VSIX assets bundle a ready-to-run CPU or CUDA engine
+**Add**, then a native model worker, uses its model source, CPU/CUDA device and
+machine defined in the settings panel (see :doc:`settings`).
+Inference and repository execution machines can differ. Native release VSIX assets bundle a ready-to-run CPU or CUDA engine
 for :doc:`supported platforms <../getting_started>`. Models are not bundled.
 In a Linux x64 source checkout, the first local session builds a missing engine
 automatically (about two minutes, with a progress notification).
@@ -55,8 +57,9 @@ External workers, including NPU/vendor runtimes, can be selected with
 ``devdashAgents.localWorkerPath``. The engine runs on
 the workspace extension host, including in SSH, WSL and dev containers.
 
-One model worker is shared by all local sessions that use the same model
-directory and device, including sessions in different repositories. Each conversation has
+One model worker is shared by all sessions assigned to that worker,
+including sessions in different repositories. Distinct worker identifiers run
+independently, even for the same model and device. Each conversation has
 an isolated KV cache. The worker serializes inference requests so sessions do
 not overlap calls into ONNX Runtime GenAI.
 
@@ -77,11 +80,10 @@ but cannot generate until CUDA, NPU or CPU is selected in the Sessions panel;
 that selection starts a fresh worker and the conversation's prompt is evaluated
 again to rebuild its cache.
 
-Use **Add**, then **Local**, to open another independent local conversation for the
-same repository. Each new session uses the model and device currently selected
-in Settings; changing those settings does not move existing sessions. Sessions
-on different GPUs use separate workers, while sessions sharing a model and
-device share its worker with separate context caches. Choose a conversation in
+Use **Add**, then a native worker, to open another independent local conversation for the
+same repository. Each new session saves its chosen worker and execution machine;
+changing Settings does not move existing sessions. Sessions
+assigned to the same worker share it with separate context caches. Choose a conversation in
 the **Session** selector or the Sessions panel. Drafts, transcripts,
 cancellation and context reduction belong to the selected conversation; saved
 transcripts are retained across application restarts.

@@ -1,5 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { validateLocalModelDirectory } from "./local-model";
 import { installEngine, type LocalProvider } from "./local-worker";
 
@@ -26,11 +26,19 @@ export async function prepareLocalModel(
   },
 ): Promise<string> {
   options.signal?.throwIfAborted();
-  const directory = resolve(source);
-  const info = await stat(directory).catch((error: NodeJS.ErrnoException) => {
+  let directory = resolve(source);
+  let info = await stat(directory).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return undefined;
     throw error;
   });
+  if (info?.isFile()) {
+    if (!/\.(onnx|json|safetensors|bin)$/i.test(directory))
+      throw new Error(
+        "Choose an ONNX/GenAI file or a Transformers checkpoint file with its configuration and tokenizer alongside it.",
+      );
+    directory = dirname(directory);
+    info = await stat(directory);
+  }
   if (info) {
     if (!info.isDirectory()) return validateLocalModelDirectory(directory);
     const genai = await stat(join(directory, "genai_config.json")).catch(

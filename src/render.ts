@@ -343,13 +343,54 @@ export function renderApplication(resources: {
     </section>
     <section id="settings-view" aria-label="Settings" hidden>
       <h2>Settings</h2>
+      <section class="settings-group" aria-labelledby="machines-title">
+        <h3 id="machines-title">Machines</h3>
+        <p class="repository-hint">One local machine and any number of remote entries. Different identifiers may connect to the same host. Paths belong to that machine; remote hosts require a POSIX shell and standard GNU utilities.</p>
+        <label for="machine-entry">Edit machine</label>
+        <select id="machine-entry"><option value="">Add a remote machine</option></select>
+        <form id="machine-configuration">
+          <label for="machine-id">Identifier (stable, unique)</label><input id="machine-id" required pattern="[A-Za-z0-9_-]{1,100}" maxlength="100">
+          <label for="machine-name">Display name</label><input id="machine-name" required maxlength="100">
+          <label for="machine-command">Connection command (empty for local)</label><input id="machine-command" maxlength="4096" placeholder="ssh user@host">
+          <label for="machine-repositories">Repositories directory</label><input id="machine-repositories" required maxlength="4096">
+          <label for="machine-models">Models storage directory</label><input id="machine-models" required maxlength="4096">
+          <label for="machine-worker">Native worker executable</label><input id="machine-worker" required maxlength="4096" value="devdash-genai-worker">
+          <label for="machine-copilot">Copilot CLI executable</label><input id="machine-copilot" required maxlength="4096" value="copilot">
+          <button type="submit">Save machine</button><button id="delete-machine" type="button" disabled>Delete machine</button>
+        </form>
+      </section>
+      <section class="settings-group" aria-labelledby="workers-title">
+        <h3 id="workers-title">Workers</h3>
+        <p class="repository-hint">Each worker has exactly one model. Add a session to choose its worker and execution machine independently. Copilot runs on its execution machine. Existing sessions keep their saved assignment when Settings change.</p>
+        <label for="worker-entry">Edit worker</label><select id="worker-entry"><option value="">Add a worker</option></select>
+        <form id="worker-configuration">
+          <label for="worker-id">Identifier (stable, unique)</label><input id="worker-id" required pattern="[A-Za-z0-9_-]{1,100}" maxlength="100">
+          <label for="worker-name">Display name</label><input id="worker-name" required maxlength="100">
+          <label for="worker-machine">Worker machine</label><select id="worker-machine"></select>
+          <label for="worker-kind">Model source</label>
+          <select id="worker-kind">
+            <option value="copilot">Copilot model ID (empty = CLI default)</option>
+            <option value="file">ONNX/GenAI file or directory</option>
+            <option value="checkpoint">Transformers checkpoint file or directory</option>
+            <option value="model-id">Hugging Face model ID</option>
+            <option value="foundry">Foundry catalogue model ID</option>
+          </select>
+          <label for="worker-source">Path or model ID</label><input id="worker-source" maxlength="4096" list="worker-model-suggestions">
+          <datalist id="worker-model-suggestions"></datalist>
+          <label for="worker-provider">Device</label><select id="worker-provider"><option value="cpu">CPU</option><option value="cuda">CUDA</option></select>
+          <label for="worker-device">Device index</label><input id="worker-device" type="number" min="0" step="1" value="0" required>
+          <p class="repository-hint">Relative file/checkpoint paths use the worker machine's models directory. Files need their GenAI or Transformers configuration, weights and tokenizer alongside them; standalone ONNX and GGUF are not supported. Checkpoints and model IDs are exported on the worker machine using Python model-builder dependencies. Foundry packages are downloaded then streamed to remote storage if needed.</p>
+          <button type="submit">Save worker</button><button id="delete-worker" type="button" disabled>Delete worker</button>
+        </form>
+        <p id="execution-configuration-status" role="status"></p>
+      </section>
       <form id="harness-settings" class="settings-group" aria-labelledby="harness-settings-title">
         <h3 id="harness-settings-title">Harness settings</h3>
         <label for="cli-path">Copilot CLI executable</label>
         <input id="cli-path" type="text" value="copilot" required maxlength="4096">
         <label for="local-worker-path">Local worker executable</label>
         <input id="local-worker-path" type="text" value="devdash-genai-worker" required maxlength="4096">
-        <p class="repository-hint">Use trusted executables only. Executed directly without a shell. Paths apply to new Copilot sessions and new local workers; restart existing sessions to use a changed executable.</p>
+        <p class="repository-hint">Use trusted executables only. These paths are legacy defaults, executed directly without a shell. Configured workers use the paths saved in their machine assignment; existing sessions keep that assignment.</p>
         <label for="request-timeout-minutes">Request timeout (minutes)</label>
         <input id="request-timeout-minutes" type="number" value="60" min="1" max="35791" step="1" required>
         <p class="repository-hint">Applies to subsequent Copilot operations, including in existing sessions. Running operations keep their deadline.</p>
@@ -359,6 +400,8 @@ export function renderApplication(resources: {
         <button id="save-harness-settings" type="submit">Save harness settings</button>
         <p id="harness-settings-status" role="status" aria-live="polite"></p>
       </form>
+      <details><summary>Legacy defaults and Foundry catalogue browser</summary>
+      <p class="repository-hint">Legacy defaults initialize machines and workers until the new configuration is first saved. Afterwards, edit machines and workers above. The catalogue browser below supplies Foundry IDs for worker model sources.</p>
       <section class="settings-group" aria-labelledby="copilot-model-title">
         <h3 id="copilot-model-title">Copilot model</h3>
         <label for="copilot-model">Model used by Copilot sessions</label>
@@ -368,7 +411,7 @@ export function renderApplication(resources: {
         </div>
         <p id="copilot-model-status" class="settings-status" role="status"></p>
         <p id="copilot-model-error" class="settings-error" role="alert" hidden></p>
-        <p class="repository-hint">Switches open Copilot sessions from their next message and applies to future sessions. CLI default applies to sessions opened afterwards.</p>
+        <p class="repository-hint">Changes unassigned legacy Copilot sessions only. Configured workers and their sessions keep their own model. CLI default applies to unassigned sessions opened afterwards.</p>
       </section>
       <section class="settings-group" aria-labelledby="execution-machine-title">
         <h3 id="execution-machine-title">Execution machine</h3>
@@ -432,6 +475,7 @@ export function renderApplication(resources: {
         <p class="repository-hint">This preference is used the next time a shared model is loaded. Move a loaded model between devices or unload it in the Sessions panel.</p>
       </section>
       <button id="open-vscode-settings" type="button" title="Open all DevDash Agents settings in VS Code">All settings in VS Code...</button>
+      </details>
     </section>
   </aside>
 </main>

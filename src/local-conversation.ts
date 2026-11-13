@@ -8,6 +8,7 @@ import type { Conversation } from "./conversation";
 import type { ImageAttachment } from "./images";
 import type { LocalModelInfo } from "./local-model";
 import { LocalResponse } from "./local-response";
+import { remoteError, runRemoteScript } from "./remote";
 import type {
   ContextReductionMode,
   LocalChatMessage,
@@ -176,7 +177,18 @@ export class LocalConversation implements Conversation {
       this.device = device;
       this.ready = true;
       if (this.tools) {
-        const entries = await readdir(this.tools.repositoryPath);
+        let entries: string[];
+        if (this.tools.remote) {
+          const result = await runRemoteScript(
+            this.tools.remote,
+            "cd -- \"$1\" && find . -mindepth 1 -maxdepth 1 -printf '%f\\0'",
+            [this.tools.repositoryPath],
+            { signal: operationSignal },
+          );
+          if (!result.completed || result.code !== 0)
+            throw remoteError(result, "Listing the remote repository failed");
+          entries = result.stdout.toString("utf8").split("\0").filter(Boolean);
+        } else entries = await readdir(this.tools.repositoryPath);
         operationSignal.throwIfAborted();
         this.history.push({
           role: "system",

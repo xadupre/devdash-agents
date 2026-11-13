@@ -49,6 +49,15 @@ repositories while keeping separate KV caches. The Sessions panel moves the
 model between devices or unloads it; DISK unloads without saving model or cache
 data. Local prompts do not fall back to Copilot.
 
+**Settings** configures one local machine, multiple remote entries (including
+several entries for the same host), and single-model **workers** on CPU or a
+CUDA device. Each machine has repository and model-storage directories.
+**Add** assigns a worker and an execution machine to each session independently:
+native inference may run elsewhere; Copilot CLI runs on its execution machine.
+Sources include ONNX/GenAI files or directories, Transformers checkpoints, Hub
+model IDs and Foundry catalogue IDs. Existing sessions retain their assignment.
+See [settings](docs/features/settings.rst).
+
 Release VSIX assets include a ready-to-run native worker: **Linux x64** and
 **Windows x64**, each with **CPU** or **CUDA** variants, and **macOS Apple Silicon**
 with CPU. Choose the variant matching the extension host, not necessarily your

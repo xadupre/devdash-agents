@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
-import { delimiter, isAbsolute, resolve } from "node:path";
+import { delimiter, isAbsolute, resolve, join } from "node:path";
 import type {
   CopilotClient,
   PermissionHandler,
@@ -43,6 +43,7 @@ export interface CopilotOptions {
   onUserInputRequest?: UserInputHandler;
   analysisOnly?: boolean;
   responseSchema?: Record<string, unknown>;
+  remote?: { command: string; workingDirectory: string };
 }
 
 async function resolveCliPath(
@@ -100,12 +101,24 @@ export async function createCopilotClient(
   }
   const { CopilotClient, RuntimeConnection } =
     await import("@github/copilot-sdk");
-  const cliPath = await resolveCliPath(
-    options.cliPath,
-    options.workingDirectory,
-  );
+  const cliPath = options.remote
+    ? process.execPath
+    : await resolveCliPath(options.cliPath, options.workingDirectory);
   return new CopilotClient({
-    connection: RuntimeConnection.forStdio({ path: cliPath }),
+    connection: RuntimeConnection.forStdio({
+      path: cliPath,
+      ...(options.remote
+        ? {
+            env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+            args: [
+              join(__dirname, "copilot-remote.js"),
+              options.remote.command,
+              options.remote.workingDirectory,
+              options.cliPath,
+            ],
+          }
+        : {}),
+    }),
     workingDirectory: options.workingDirectory,
     useLoggedInUser: true,
   });
@@ -175,7 +188,11 @@ export function listCopilotSessions(
     options,
     "Listing Copilot sessions",
     async (client) =>
-      (await client.listSessions({ gitRoot: options.workingDirectory }))
+      (
+        await client.listSessions({
+          gitRoot: options.remote?.workingDirectory ?? options.workingDirectory,
+        })
+      )
         .filter((session) => !session.isRemote)
         .map(({ sessionId, summary, modifiedTime, context }) => ({
           sessionId,
@@ -190,7 +207,8 @@ export function listCopilotSessions(
 export function copilotSessionConfig(options: CopilotOptions): SessionConfig {
   return {
     ...(options.model ? { model: options.model } : {}),
-    workingDirectory: options.workingDirectory,
+    workingDirectory:
+      options.remote?.workingDirectory ?? options.workingDirectory,
     trustWorkingDirectory: "session",
     enableConfigDiscovery: true,
     enableFileHooks: false,

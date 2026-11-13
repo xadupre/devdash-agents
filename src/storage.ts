@@ -6,6 +6,7 @@ import { parsePostMortem, type PostMortem } from "./postmortem";
 import { parseImages } from "./images";
 import { MAX_SELECTION_LENGTH } from "./prompt";
 import type { StepTiming } from "./timing";
+import { parseSessionAssignment, type SessionAssignment } from "./execution";
 
 export interface SessionAnnotation {
   mark: "success" | "failure" | "abandon";
@@ -42,6 +43,7 @@ export function parseSessionAnnotation(value: unknown): SessionAnnotation {
 }
 
 export interface SavedConversation {
+  assignment?: SessionAssignment;
   backend?: "local" | "copilot";
   recordId?: string;
   sessionId?: string;
@@ -157,7 +159,14 @@ function parseConversation(value: unknown): SavedConversation {
       "Saved PostMortem references missing conversation records.",
     );
   }
+  const assignment =
+    value.assignment === undefined
+      ? undefined
+      : parseSessionAssignment(value.assignment);
+  if (assignment && assignment.worker.backend !== (value.backend ?? "copilot"))
+    throw new Error("Saved session and worker backends must match.");
   return {
+    ...(assignment ? { assignment } : {}),
     ...(value.backend !== undefined ? { backend: value.backend } : {}),
     ...(value.recordId !== undefined ? { recordId: value.recordId } : {}),
     sessionId: value.sessionId,

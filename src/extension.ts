@@ -20,6 +20,7 @@ import {
   listCopilotModels,
   listCopilotSessions,
   requestTimeoutMs,
+  type CopilotOptions,
 } from "./copilot";
 import { generatePostMortem, postMortemResponseSchema } from "./postmortem";
 import { exportSessionJson } from "./session-export";
@@ -60,7 +61,17 @@ import {
 } from "./remote";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
+import {
+  assignSession,
+  machineModelSource,
+  machineRepositoryPath,
+  parseExecutionConfiguration,
+  type ExecutionConfiguration,
+  type MachineConfiguration,
+  type SessionAssignment,
+} from "./execution";
+import { prepareRemoteModel, uploadRemoteModel } from "./remote-model-source";
 
 let activePanel: vscode.WebviewPanel | undefined;
 let closeActiveApplication: (() => Promise<void>) | undefined;
@@ -121,6 +132,144 @@ export function activate(context: vscode.ExtensionContext): void {
           .getConfiguration("devdashAgents")
           .get("requestTimeoutMinutes"),
       );
+    const executionConfiguration = (): ExecutionConfiguration => {
+      const settings = configuration();
+      const configured = settings.get<unknown>("execution");
+      if (configured !== undefined && configured !== null)
+        return parseExecutionConfiguration(configured);
+      const remotes = parseRemoteMachines(
+        settings.get<unknown>("remoteMachines", []),
+      );
+      const machines: MachineConfiguration[] = [
+        {
+          id: "local",
+          name: "This computer",
+          command: "",
+          repositoriesPath: root.fsPath,
+          modelsPath: join(context.globalStorageUri.fsPath, "models"),
+          workerPath: settings.get<string>("localWorkerPath", DEFAULT_WORKER),
+          cliPath: settings.get<string>("cliPath", "copilot"),
+        },
+        ...remotes.map((machine, index) => ({
+          id: `remote-${index}`,
+          name: machine.name,
+          command: machine.command,
+          repositoriesPath: machine.repositoriesPath,
+          modelsPath: posix.dirname(machine.modelPath),
+          workerPath: machine.workerPath,
+          cliPath: "copilot",
+        })),
+      ];
+      const workers: ExecutionConfiguration["workers"] = machines.map(
+        (machine) => ({
+          id: `copilot-${machine.id}`,
+          name: `Copilot @ ${machine.name}`,
+          backend: "copilot",
+          machineId: machine.id,
+          model: { kind: "copilot", source: currentModel() },
+          provider: "cpu",
+          deviceId: 0,
+        }),
+      );
+      const localSource = settings.get<string>("localModelPath", "");
+      for (const [index, machine] of machines.entries()) {
+        const source =
+          index === 0 ? localSource : remotes[index - 1]!.modelPath;
+        if (!source) continue;
+        workers.push({
+          id: `model-${machine.id}`,
+          name: `Model @ ${machine.name}`,
+          backend: "local",
+          machineId: machine.id,
+          model: {
+            kind: isTransformersModelId(source) ? "model-id" : "checkpoint",
+            source,
+          },
+          provider:
+            settings.get<string>("localProvider") === "cuda" ? "cuda" : "cpu",
+          deviceId: Math.max(0, settings.get<number>("localDeviceId", 0)),
+        });
+      }
+      return parseExecutionConfiguration({ machines, workers });
+    };
+    const asRemote = (
+      machine: MachineConfiguration,
+      modelPath = machine.modelsPath,
+    ): RemoteMachine | undefined =>
+      machine.command
+        ? {
+            name: machine.id,
+            command: machine.command,
+            workerPath: machine.workerPath,
+            modelPath,
+            repositoriesPath: machine.repositoriesPath,
+          }
+        : undefined;
+    const chooseAssignment = async (
+      backend?: "copilot" | "local",
+    ): Promise<SessionAssignment | undefined> => {
+      const config = executionConfiguration();
+      const workers = config.workers.filter(
+        (worker) => !backend || worker.backend === backend,
+      );
+      if (!workers.length)
+        throw new Error(
+          "Configure a worker in Settings before opening a session.",
+        );
+      const picked = await vscode.window.showQuickPick(
+        workers.map((worker) => ({
+          label: worker.name,
+          description: `${worker.backend} | ${worker.model.source || "CLI default"} | ${worker.machineId}${worker.backend === "local" ? ` | ${worker.provider.toUpperCase()} ${worker.deviceId}` : ""}`,
+          worker,
+        })),
+        { title: "Session worker (one model)" },
+      );
+      if (!picked) return undefined;
+      const machines = config.machines.filter(
+        (machine) =>
+          picked.worker.backend !== "copilot" ||
+          machine.id === picked.worker.machineId,
+      );
+      const machine = await vscode.window.showQuickPick(
+        machines.map((machine) => ({
+          label: `${machine.name} (${machine.id})`,
+          description: machine.repositoriesPath,
+          machine,
+        })),
+        { title: "Session execution machine (files and commands)" },
+      );
+      if (!machine) return undefined;
+      return assignSession(config, picked.worker.id, machine.machine.id);
+    };
+    const copilotOptions = (
+      repositoryPath: string,
+      assignment?: SessionAssignment,
+    ): Pick<
+      CopilotOptions,
+      "cliPath" | "model" | "workingDirectory" | "remote"
+    > => {
+      const machine = assignment?.executionMachine;
+      return {
+        cliPath:
+          machine?.cliPath ?? configuration().get<string>("cliPath", "copilot"),
+        model: assignment?.worker.model.source ?? currentModel(),
+        workingDirectory:
+          machine && !machine.command
+            ? machineRepositoryPath(machine, repositoryPath)
+            : repositoryPath,
+        ...(machine?.command
+          ? {
+              remote: {
+                command: machine.command,
+                workingDirectory: machineRepositoryPath(
+                  machine,
+                  repositoryPath,
+                ),
+              },
+            }
+          : {}),
+      };
+    };
     const storage = new ApplicationStorage(homedir(), root.fsPath);
     const saved = await storage.load();
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -131,6 +280,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const initialPlacements = new WeakMap<LocalModelHost, LocalPlacement>();
     // Hosts are shared only between sessions targeting the same machine.
     const hostMachines = new WeakMap<LocalModelHost, string>();
+    const hostWorkers = new WeakMap<LocalModelHost, string>();
     const localModelInfo = new Map<
       string,
       Awaited<ReturnType<typeof inspectLocalModel>>
@@ -160,11 +310,9 @@ export function activate(context: vscode.ExtensionContext): void {
     };
     const application: AgentApplication = new AgentApplication(
       root.fsPath,
-      (repository, requestId, view) =>
+      (repository, requestId, view, assignment) =>
         new CopilotConversation({
-          cliPath: configuration().get<string>("cliPath", "copilot"),
-          model: currentModel(),
-          workingDirectory: repository.path,
+          ...copilotOptions(repository.path, assignment),
           get timeoutMs() {
             return requestTimeout();
           },
@@ -368,6 +516,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const settings = vscode.workspace.getConfiguration("devdashAgents");
       const update: SettingsState = {
         type: "settings-state",
+        execution: executionConfiguration(),
         cliPath: settings.get<string>("cliPath", "copilot"),
         localWorkerPath: settings.get<string>(
           "localWorkerPath",
@@ -427,10 +576,12 @@ export function activate(context: vscode.ExtensionContext): void {
           publishSettings();
         }
       })());
-    const prepareWorker = async (): Promise<string> => {
-      const configuredWorker = vscode.workspace
-        .getConfiguration("devdashAgents")
-        .get<string>("localWorkerPath", DEFAULT_WORKER);
+    const prepareWorker = async (override?: string): Promise<string> => {
+      const configuredWorker =
+        override ??
+        vscode.workspace
+          .getConfiguration("devdashAgents")
+          .get<string>("localWorkerPath", DEFAULT_WORKER);
       let executable = resolveWorkerExecutable(
         configuredWorker,
         context.extensionPath,
@@ -482,6 +633,7 @@ export function activate(context: vscode.ExtensionContext): void {
       machine: string;
       executable: string;
       args: string[];
+      workerId?: string;
     }
     const workerLaunch = async (
       remote: RemoteMachine | undefined,
@@ -513,9 +665,17 @@ export function activate(context: vscode.ExtensionContext): void {
       modelInfo: LocalModelInfo,
     ): LocalModelHost => {
       const desired = { provider, deviceId };
+      if (launch.workerId) {
+        const shared = [...localHosts.values()].find(
+          (host) => hostWorkers.get(host) === launch.workerId,
+        );
+        if (shared) return shared;
+      }
       const existing = findLocalModelHost(
         [...localHosts.values()].filter(
-          (host) => (hostMachines.get(host) ?? "") === launch.machine,
+          (host) =>
+            (hostMachines.get(host) ?? "") === launch.machine &&
+            (hostWorkers.get(host) ?? "") === (launch.workerId ?? ""),
         ),
         modelPath,
         desired,
@@ -542,6 +702,7 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       localHosts.set(hostId, host);
       hostMachines.set(host, launch.machine);
+      if (launch.workerId) hostWorkers.set(host, launch.workerId);
       initialPlacements.set(host, { provider, deviceId });
       return host;
     };
@@ -565,24 +726,77 @@ export function activate(context: vscode.ExtensionContext): void {
         await discovery.stop();
       }
     };
+    const preparedWorkerSources = new Map<string, Promise<string>>();
+    const prepareWorkerSource = (
+      assignment: SessionAssignment,
+    ): Promise<string> => {
+      const { worker, workerMachine } = assignment;
+      const key = JSON.stringify([worker, workerMachine]);
+      const existing = preparedWorkerSources.get(key);
+      if (existing) return existing;
+      const prepare = async (): Promise<string> => {
+        if (worker.model.kind === "foundry") {
+          const downloaded = await downloadFoundryModel(
+            worker.model.source,
+            workerMachine.command
+              ? context.globalStorageUri.fsPath
+              : workerMachine.modelsPath,
+            { signal: lifetime.signal },
+          );
+          return workerMachine.command
+            ? uploadRemoteModel(
+                workerMachine,
+                downloaded,
+                worker.model.source,
+                lifetime.signal,
+              )
+            : downloaded;
+        }
+        const source =
+          worker.model.kind === "model-id"
+            ? worker.model.source
+            : machineModelSource(workerMachine, worker.model.source);
+        return workerMachine.command
+          ? prepareRemoteModel(workerMachine, worker, source, lifetime.signal)
+          : Promise.resolve(source);
+      };
+      const result = prepare().catch((error) => {
+        if (preparedWorkerSources.get(key) === result)
+          preparedWorkerSources.delete(key);
+        throw error;
+      });
+      preparedWorkerSources.set(key, result);
+      return result;
+    };
     const createLocalSessionSetup = (
       id: string,
       repositoryPath: string,
+      assignment?: SessionAssignment,
     ): LocalSessionSetup => {
-      const remote = configuredRemoteMachine();
-      const configuredPath = remote
-        ? remote.modelPath
-        : vscode.workspace
-            .getConfiguration("devdashAgents")
-            .get<string>("localModelPath", "");
+      const remote = assignment
+        ? asRemote(assignment.workerMachine)
+        : configuredRemoteMachine();
+      const configuredPath = assignment
+        ? assignment.worker.model.source
+        : remote
+          ? remote.modelPath
+          : vscode.workspace
+              .getConfiguration("devdashAgents")
+              .get<string>("localModelPath", "");
       if (!configuredPath)
         throw new Error(
           "Choose a local model in Settings before opening a local session.",
         );
-      const toolRepositoryPath = remote
-        ? remoteRepositoryPath(remote, repositoryPath)
-        : repositoryPath;
-      const { provider, deviceId } = configuredLocalDevice();
+      const toolRemote = assignment
+        ? asRemote(assignment.executionMachine)
+        : remote;
+      const toolRepositoryPath = assignment
+        ? machineRepositoryPath(assignment.executionMachine, repositoryPath)
+        : remote
+          ? remoteRepositoryPath(remote, repositoryPath)
+          : repositoryPath;
+      const { provider, deviceId } =
+        assignment?.worker ?? configuredLocalDevice();
       let modelPath!: string;
       let modelInfo!: LocalModelInfo;
       let launch!: WorkerLaunch;
@@ -591,6 +805,7 @@ export function activate(context: vscode.ExtensionContext): void {
         deviceId,
       };
       return {
+        assignment,
         create: (localSessionId) => {
           if (!localSessionId)
             throw new Error("Missing local session identity.");
@@ -608,7 +823,7 @@ export function activate(context: vscode.ExtensionContext): void {
             placement.deviceId >= 0 ? placement.deviceId : undefined,
             {
               repositoryPath: toolRepositoryPath,
-              ...(remote ? { remote } : {}),
+              ...(toolRemote ? { remote: toolRemote } : {}),
               canEdit: () =>
                 application.canEditLocalSession(id, localSessionId),
               requestPermission: (description) =>
@@ -623,8 +838,14 @@ export function activate(context: vscode.ExtensionContext): void {
           );
         },
         prepare: async () => {
+          const selectedPath = assignment
+            ? await prepareWorkerSource(assignment)
+            : configuredPath;
           if (remote) {
-            const inspected = await inspectRemoteModel(remote, lifetime.signal);
+            const inspected = await inspectRemoteModel(
+              { ...remote, modelPath: selectedPath },
+              lifetime.signal,
+            );
             modelPath = inspected.directory;
             modelInfo = {
               ...inspected.info,
@@ -632,12 +853,30 @@ export function activate(context: vscode.ExtensionContext): void {
             };
             launch = await workerLaunch(remote);
           } else {
-            modelPath = await prepareModel(configuredPath, provider);
-            launch = await workerLaunch(undefined);
+            modelPath = await prepareModel(
+              selectedPath,
+              provider,
+              false,
+              assignment?.workerMachine.modelsPath,
+            );
+            launch = assignment
+              ? {
+                  machine: "",
+                  executable: await prepareWorker(
+                    assignment.workerMachine.workerPath,
+                  ),
+                  args: [],
+                }
+              : await workerLaunch(undefined);
             const cached = localModelInfo.get(modelPath);
             modelInfo = cached ?? (await inspectLocalModel(modelPath));
             localModelInfo.set(modelPath, modelInfo);
           }
+          if (assignment)
+            launch.workerId = JSON.stringify([
+              assignment.worker,
+              assignment.workerMachine,
+            ]);
           if (stopping || !panel)
             throw new Error("The application is closing.");
           placement = await resolveLocalPlacement(launch, provider, deviceId);
@@ -656,6 +895,7 @@ export function activate(context: vscode.ExtensionContext): void {
       source: string,
       provider = configuredLocalDevice().provider,
       refresh = false,
+      storageDirectory = join(context.globalStorageUri.fsPath, "models"),
     ): Promise<string> => {
       const targetProvider =
         provider === "auto" &&
@@ -669,7 +909,7 @@ export function activate(context: vscode.ExtensionContext): void {
               )
             ).provider
           : provider;
-      const key = JSON.stringify([source, targetProvider]);
+      const key = JSON.stringify([source, targetProvider, storageDirectory]);
       const existing = preparedModels.get(key);
       if (existing && !refresh) return existing;
       const preparing = vscode.window.withProgress(
@@ -684,14 +924,10 @@ export function activate(context: vscode.ExtensionContext): void {
             controller.abort(),
           );
           try {
-            return await prepareLocalModel(
-              source,
-              join(context.globalStorageUri.fsPath, "models"),
-              {
-                provider: targetProvider,
-                signal: AbortSignal.any([controller.signal, lifetime.signal]),
-              },
-            );
+            return await prepareLocalModel(source, storageDirectory, {
+              provider: targetProvider,
+              signal: AbortSignal.any([controller.signal, lifetime.signal]),
+            });
           } finally {
             subscription.dispose();
           }
@@ -866,6 +1102,7 @@ export function activate(context: vscode.ExtensionContext): void {
             "approvedUrlOrigins",
             "remoteMachines",
             "remoteMachine",
+            "execution",
           ].some((key) => event.affectsConfiguration(`devdashAgents.${key}`))
         ) {
           if (
@@ -1025,6 +1262,7 @@ export function activate(context: vscode.ExtensionContext): void {
               if (!message.model) break;
               for (const repository of application.getState().repositories) {
                 if (
+                  application.getAssignment(repository.id) ||
                   repository.backend === "local" ||
                   !["ready", "busy"].includes(repository.status)
                 )
@@ -1109,6 +1347,26 @@ export function activate(context: vscode.ExtensionContext): void {
               }
               break;
             }
+            case "execution-configuration": {
+              const save = async (): Promise<void> => {
+                const settings = configuration();
+                await settings.update(
+                  "execution",
+                  message.configuration,
+                  vscode.ConfigurationTarget.Global,
+                );
+                if (settings.inspect("execution")?.workspaceValue !== undefined)
+                  await settings.update(
+                    "execution",
+                    message.configuration,
+                    vscode.ConfigurationTarget.Workspace,
+                  );
+                publishSettings();
+              };
+              savingConfiguration = savingConfiguration.then(save, save);
+              await savingConfiguration;
+              break;
+            }
             case "local-device": {
               const settings =
                 vscode.workspace.getConfiguration("devdashAgents");
@@ -1148,7 +1406,14 @@ export function activate(context: vscode.ExtensionContext): void {
                 : matches[0];
               if (!host || host.modelPath !== message.modelPath)
                 throw new Error("The local model is not currently open.");
-              await host.place(message.placement, localHosts.values());
+              await host.place(
+                message.placement,
+                [...localHosts.values()].filter(
+                  (peer) =>
+                    hostMachines.get(peer) === hostMachines.get(host) &&
+                    hostWorkers.get(peer) === hostWorkers.get(host),
+                ),
+              );
               if (message.placement.provider !== "disk")
                 initialPlacements.set(host, message.placement);
               break;
@@ -1249,7 +1514,8 @@ export function activate(context: vscode.ExtensionContext): void {
                 message.view ?? "copilot",
               );
               break;
-            case "postmortem":
+            case "postmortem": {
+              const assignment = application.getAssignment(message.id);
               if (
                 application
                   .getState()
@@ -1267,12 +1533,7 @@ export function activate(context: vscode.ExtensionContext): void {
                     source,
                     (prompt, signal) =>
                       askCopilot(prompt, {
-                        cliPath: configuration().get<string>(
-                          "cliPath",
-                          "copilot",
-                        ),
-                        model: currentModel(),
-                        workingDirectory: source.repository.path,
+                        ...copilotOptions(source.repository.path, assignment),
                         signal,
                         timeoutMs: requestTimeout(),
                         analysisOnly: true,
@@ -1284,6 +1545,7 @@ export function activate(context: vscode.ExtensionContext): void {
               );
               await storage.save(application.getSnapshot());
               break;
+            }
             case "export-postmortem": {
               const json = application.exportPostMortem(message.id);
               const destination = await vscode.window.showSaveDialog({
@@ -1362,50 +1624,47 @@ export function activate(context: vscode.ExtensionContext): void {
                 .getState()
                 .repositories.find((entry) => entry.id === message.id);
               if (!repository) throw new Error("Unknown repository.");
+              const assignment =
+                application.getAssignment(message.id) ??
+                (await chooseAssignment(repository.backend ?? "copilot"));
+              if (!assignment) break;
               if (repository.backend === "local") {
                 const setup = createLocalSessionSetup(
                   message.id,
                   repository.path,
+                  assignment,
                 );
                 await application.openLocalSession(
                   message.id,
                   setup.create,
                   setup.prepare,
+                  false,
+                  assignment,
                 );
               } else {
-                await application.restart(message.id);
+                await application.restart(message.id, assignment);
               }
               break;
             }
-            case "open-session":
-              await application.openSession(message.id);
+            case "open-session": {
+              const existing = application.getAssignment(message.id, "copilot");
+              const assignment =
+                existing ?? (await chooseAssignment("copilot"));
+              if (!assignment) break;
+              await application.openSession(
+                message.id,
+                existing ? undefined : assignment,
+              );
               break;
+            }
             case "select-session":
               application.selectSession(message.id, message.view);
               break;
             case "add-session": {
-              const picked = await vscode.window.showQuickPick(
-                [
-                  {
-                    label: "Copilot",
-                    description: "Add an independent Copilot session",
-                    backend: "copilot" as const,
-                  },
-                  {
-                    label: "Local",
-                    description:
-                      "Use the model and device selected in Settings",
-                    backend: "local" as const,
-                  },
-                ],
-                {
-                  title: "Add session",
-                  placeHolder: "Choose the session type",
-                },
-              );
-              if (!picked) break;
-              if (picked.backend === "copilot")
-                await application.addCopilotSession(message.id);
+              const assignment = await chooseAssignment();
+              if (!assignment) break;
+              if (assignment.worker.backend === "copilot")
+                await application.addCopilotSession(message.id, assignment);
               else {
                 const repository = application
                   .getState()
@@ -1414,12 +1673,14 @@ export function activate(context: vscode.ExtensionContext): void {
                 const setup = createLocalSessionSetup(
                   message.id,
                   repository.path,
+                  assignment,
                 );
                 await application.openLocalSession(
                   message.id,
                   setup.create,
                   setup.prepare,
                   true,
+                  assignment,
                 );
               }
               break;
@@ -1450,15 +1711,23 @@ export function activate(context: vscode.ExtensionContext): void {
                 });
                 break;
               }
+              const existing =
+                message.type === "open-local-session" && repository.localSession
+                  ? application.getAssignment(message.id, "local")
+                  : undefined;
+              const assignment = existing ?? (await chooseAssignment("local"));
+              if (!assignment) break;
               const setup = createLocalSessionSetup(
                 message.id,
                 repository.path,
+                assignment,
               );
               await application.openLocalSession(
                 message.id,
                 setup.create,
                 setup.prepare,
                 message.type === "new-local-session",
+                setup.assignment,
               );
               break;
             }
@@ -1470,6 +1739,15 @@ export function activate(context: vscode.ExtensionContext): void {
                 .getState()
                 .repositories.find((entry) => entry.id === message.id);
               if (!repository) throw new Error("Unknown repository.");
+              const current = application.getAssignment(
+                message.id,
+                message.view,
+              );
+              const assignment =
+                current?.worker.backend === "copilot"
+                  ? current
+                  : await chooseAssignment("copilot");
+              if (!assignment) break;
               const sessions = await vscode.window.withProgress(
                 {
                   location: vscode.ProgressLocation.Notification,
@@ -1477,8 +1755,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 },
                 () =>
                   listCopilotSessions({
-                    cliPath: configuration().get<string>("cliPath", "copilot"),
-                    workingDirectory: repository.path,
+                    ...copilotOptions(repository.path, assignment),
                     timeoutMs: requestTimeout(),
                   }),
               );
@@ -1511,7 +1788,7 @@ export function activate(context: vscode.ExtensionContext): void {
               if (message.view)
                 application.selectSession(message.id, message.view);
               await application
-                .resumeSession(message.id, picked.sessionId)
+                .resumeSession(message.id, picked.sessionId, assignment)
                 .finally(() => storage.save(application.getSnapshot()));
               break;
             }
@@ -1527,13 +1804,21 @@ export function activate(context: vscode.ExtensionContext): void {
                 .getState()
                 .repositories.find((entry) => entry.id === message.id);
               if (!repository) throw new Error("Unknown repository.");
+              const assignment =
+                application.getAssignment(message.id) ??
+                (await chooseAssignment(repository.backend ?? "copilot"));
+              if (!assignment) break;
               const operation =
                 repository.backend === "local"
                   ? application.newSession(
                       message.id,
-                      createLocalSessionSetup(message.id, repository.path),
+                      createLocalSessionSetup(
+                        message.id,
+                        repository.path,
+                        assignment,
+                      ),
                     )
-                  : application.newSession(message.id);
+                  : application.newSession(message.id, undefined, assignment);
               await operation.finally(() =>
                 storage.save(application.getSnapshot()),
               );
@@ -1563,6 +1848,17 @@ export function activate(context: vscode.ExtensionContext): void {
               type: "harness-settings-result",
               requestId: harnessSettingsRequestId,
               error: message,
+            });
+          } else if (
+            panel &&
+            value !== null &&
+            typeof value === "object" &&
+            "type" in value &&
+            value.type === "execution-configuration"
+          ) {
+            await panel.webview.postMessage({
+              type: "execution-configuration-error",
+              message,
             });
           } else if (panel && datasetAction) {
             await panel.webview.postMessage({

@@ -57,6 +57,12 @@ import type { SessionEvent } from "@github/copilot-sdk" with {
 };
 import { basename } from "node:path";
 import { parseRemoteMachines, type RemoteMachine } from "./remote";
+import {
+  parseExecutionConfiguration,
+  parseSessionAssignment,
+  type ExecutionConfiguration,
+  type SessionAssignment,
+} from "./execution";
 
 export type SessionStatus =
   "idle" | "saved" | "starting" | "ready" | "busy" | "error" | "stopping";
@@ -74,6 +80,7 @@ function isSessionView(value: unknown): value is SessionView {
 export interface LocalSessionSetup {
   create: (localSessionId?: string) => Conversation;
   prepare: () => Promise<void>;
+  assignment?: SessionAssignment;
 }
 export type InformationType =
   "messages" | "reasoning" | "tools" | "output" | "system";
@@ -122,6 +129,7 @@ export interface ApplicationState {
       model?: string;
       readOnly?: boolean;
       generation: number;
+      assignment?: SessionAssignment;
     }[];
     localSession?: {
       id?: string;
@@ -184,6 +192,7 @@ export interface PendingQuestion extends UserInputRequest {
   repositoryId: string;
 }
 interface RepositorySession {
+  assignment?: SessionAssignment;
   backend?: "local" | "copilot";
   recordId: string;
   models?: string[];
@@ -260,6 +269,7 @@ export type ApplicationMessage =
     }
   | { type: "copilot-model"; model: string }
   | { type: "remote-machines"; machines: RemoteMachine[]; selected: string }
+  | { type: "execution-configuration"; configuration: ExecutionConfiguration }
   | {
       type: "reduce-context";
       id: string;
@@ -333,6 +343,14 @@ export type ApplicationMessage =
 export function parseApplicationMessage(value: unknown): ApplicationMessage {
   if (!value || typeof value !== "object" || !("type" in value)) {
     throw new Error("Invalid application message.");
+  }
+  if (value.type === "execution-configuration") {
+    return {
+      type: "execution-configuration",
+      configuration: parseExecutionConfiguration(
+        "configuration" in value ? value.configuration : undefined,
+      ),
+    };
   }
   if (
     value.type === "ready" ||
@@ -729,6 +747,7 @@ export class AgentApplication {
       repository: Repository,
       requestId?: string,
       view?: SessionView,
+      assignment?: SessionAssignment,
     ) => Conversation,
     private readonly onChange: (streaming?: boolean) => void,
     saved?: SavedApplication,
@@ -800,6 +819,9 @@ export class AgentApplication {
         const main: RepositorySession = {
           repository,
           recordId: copilotSaved?.recordId ?? randomUUID(),
+          assignment:
+            copilotSaved?.assignment &&
+            structuredClone(copilotSaved.assignment),
           models: copilotSaved?.models?.slice(),
           annotation: copilotSaved?.annotation,
           context: copilotSaved?.context,
@@ -828,6 +850,8 @@ export class AgentApplication {
             localId: randomUUID(),
             repository,
             recordId: localSaved.recordId ?? randomUUID(),
+            assignment:
+              localSaved.assignment && structuredClone(localSaved.assignment),
             models: localSaved.models?.slice(),
             annotation: localSaved.annotation,
             context: localSaved.context,
@@ -936,6 +960,9 @@ export class AgentApplication {
               model: slot.conversation?.model,
               readOnly: slot.backend === "local" ? editor !== slot : undefined,
               generation: slot.generation,
+              ...(slot.assignment
+                ? { assignment: structuredClone(slot.assignment) }
+                : {}),
             })),
             localSession: main.local
               ? {
@@ -1347,7 +1374,7 @@ export class AgentApplication {
     this.onChange();
   }
 
-  async restart(id: string): Promise<void> {
+  async restart(id: string, assignment?: SessionAssignment): Promise<void> {
     this.assertOpen();
     const current = this.getSession(id);
     this.assertAvailable(current);
@@ -1374,6 +1401,7 @@ export class AgentApplication {
       this.restoreConversation(session);
       session.localFactory = localFactory;
       session.backend = backend;
+      if (assignment) this.setAssignment(session, assignment);
       session.messages = messages;
       session.messages.push({
         role: "system",
@@ -1465,28 +1493,65 @@ export class AgentApplication {
     this.onChange();
   }
 
-  async openSession(id: string): Promise<void> {
+  async openSession(id: string, assignment?: SessionAssignment): Promise<void> {
     this.assertOpen();
     const main = this.getMainSession(id);
     this.assertAvailable(main);
+    if (assignment) this.setAssignment(main, assignment);
     main.view = "copilot";
     this.activeId = id;
     this.onChange();
     await this.startSession(main);
   }
 
-  addCopilotSession(id: string): Promise<void> {
+  getAssignment(id: string, view?: SessionView): SessionAssignment | undefined {
+    const assignment = this.getSession(id, view).assignment;
+    return assignment && structuredClone(assignment);
+  }
+
+  private setAssignment(
+    session: RepositorySession,
+    value: SessionAssignment,
+  ): void {
+    const assignment = parseSessionAssignment(value);
+    if ((session.backend ?? "copilot") !== assignment.worker.backend)
+      throw new Error("The session and worker backends must match.");
+    if (
+      session.assignment &&
+      JSON.stringify(session.assignment) === JSON.stringify(assignment)
+    )
+      return;
+    if (session.conversation || session.starting)
+      throw new Error(
+        "Close the session before changing its worker assignment.",
+      );
+    if (
+      session.assignment &&
+      JSON.stringify(session.assignment) !== JSON.stringify(assignment)
+    )
+      throw new Error("Create a new session to use another worker or machine.");
+    session.assignment = assignment;
+  }
+
+  addCopilotSession(id: string, assignment?: SessionAssignment): Promise<void> {
     this.assertOpen();
     const main = this.getMainSession(id);
     this.assertAvailable(main);
     let slot = main;
-    if (main.conversation || main.starting) {
+    if (
+      main.conversation ||
+      main.starting ||
+      (assignment &&
+        main.assignment &&
+        JSON.stringify(main.assignment) !== JSON.stringify(assignment))
+    ) {
       slot = this.createSessionSlot(main.repository);
       slot.copilotId = randomUUID();
       slot.backend = "copilot";
       (main.copilots ??= []).push(slot);
     }
     main.view = this.sessionView(slot);
+    if (assignment) this.setAssignment(slot, assignment);
     this.activeId = id;
     return this.newSession(id);
   }
@@ -1508,6 +1573,7 @@ export class AgentApplication {
     create: (localSessionId?: string) => Conversation,
     prepare?: () => Promise<void>,
     additional = false,
+    assignment?: SessionAssignment,
   ): Promise<void> {
     this.assertOpen();
     const main = this.getMainSession(id);
@@ -1533,6 +1599,7 @@ export class AgentApplication {
     main.view = "local";
     this.activeId = id;
     local.backend = "local";
+    if (assignment) this.setAssignment(local, assignment);
     local.localFactory = create;
     const status = local.status;
     if (prepare) {
@@ -1673,6 +1740,7 @@ export class AgentApplication {
             session.repository,
             undefined,
             this.sessionView(session),
+            session.assignment,
           );
         session.conversation = conversation;
         session.localLoaded = false;
@@ -1896,6 +1964,7 @@ export class AgentApplication {
       repository: parent.repository,
       recordId: randomUUID(),
       parent,
+      assignment: parent.assignment && structuredClone(parent.assignment),
       context: selection,
       status: "starting",
       messages: [user],
@@ -1918,6 +1987,7 @@ export class AgentApplication {
           parent.repository,
           requestId,
           this.sessionView(parent),
+          parent.assignment,
         );
         child.conversation = conversation;
         await conversation.start(controller.signal, (event) => {
@@ -2037,6 +2107,10 @@ export class AgentApplication {
     this.assertOpen();
     const session = this.getSession(id);
     this.assertAvailable(session);
+    if (session.assignment)
+      throw new Error(
+        "This session is bound to one worker model. Create a session with another worker to change models.",
+      );
     if (session.backend === "local") {
       throw new Error(
         "Open a new local session to change its model or device.",
@@ -2071,7 +2145,11 @@ export class AgentApplication {
     );
   }
 
-  newSession(id: string, localSetup?: LocalSessionSetup): Promise<void> {
+  newSession(
+    id: string,
+    localSetup?: LocalSessionSetup,
+    assignment?: SessionAssignment,
+  ): Promise<void> {
     if (localSetup) {
       const main = this.getMainSession(id);
       this.assertAvailable(main);
@@ -2083,13 +2161,14 @@ export class AgentApplication {
       main.local.backend = "local";
       main.local.localFactory = localSetup.create;
     }
-    return this.freshSession(id, true, localSetup);
+    return this.freshSession(id, true, localSetup, assignment);
   }
 
   private freshSession(
     id: string,
     preserveLocal: boolean,
     localSetup?: LocalSessionSetup,
+    assignment?: SessionAssignment,
   ): Promise<void> {
     return this.manageSession(id, async (session) => {
       if (
@@ -2112,6 +2191,8 @@ export class AgentApplication {
       this.restoreConversation(session);
       session.localFactory = localFactory;
       session.backend = backend;
+      const desired = assignment ?? localSetup?.assignment;
+      if (desired) this.setAssignment(session, desired);
       if (localSetup) {
         session.status = "starting";
         session.error = undefined;
@@ -2130,7 +2211,16 @@ export class AgentApplication {
    * archived by DevDash Agents is restored with its transcript; a session
    * created elsewhere (for example by the CLI) starts with an empty transcript.
    */
-  resumeSession(id: string, sessionId: string): Promise<void> {
+  resumeSession(
+    id: string,
+    sessionId: string,
+    assignment?: SessionAssignment,
+  ): Promise<void> {
+    if (assignment) {
+      assignment = parseSessionAssignment(assignment);
+      if (assignment.worker.backend !== "copilot")
+        throw new Error("Choose a Copilot worker to resume a Copilot session.");
+    }
     const main = this.getMainSession(id);
     this.assertAvailable(main);
     const existing = [main, ...(main.copilots ?? [])].find(
@@ -2169,7 +2259,13 @@ export class AgentApplication {
           : undefined;
       this.restoreConversation(
         session,
-        archived ?? { sessionId, draft: "", messages: [] },
+        archived ?? {
+          sessionId,
+          draft: "",
+          messages: [],
+          backend: "copilot",
+          assignment: assignment ?? session.assignment,
+        },
       );
       if (!archived) {
         session.messages.push({
@@ -2206,12 +2302,7 @@ export class AgentApplication {
           if (session.removed)
             throw new Error("The repository is no longer available.");
           controller.signal.throwIfAborted();
-          const cleaner = this.createConversation(
-            session.repository,
-            undefined,
-            this.sessionView(session),
-          );
-          session.conversation = cleaner;
+          const cleaners = new Map<string, Conversation>();
           try {
             do {
               if (!this.hasConversation(session)) {
@@ -2219,6 +2310,18 @@ export class AgentApplication {
                 if (!previous) break;
                 this.restoreConversation(session, previous);
               }
+              const key = JSON.stringify(session.assignment ?? null);
+              let cleaner = cleaners.get(key);
+              if (!cleaner) {
+                cleaner = this.createConversation(
+                  session.repository,
+                  undefined,
+                  this.sessionView(session),
+                  session.assignment,
+                );
+                cleaners.set(key, cleaner);
+              }
+              session.conversation = cleaner;
               if (session.sessionId)
                 await cleaner.deleteSession(
                   session.sessionId,
@@ -2228,8 +2331,10 @@ export class AgentApplication {
               this.onChange();
             } while (all && this.hasConversation(session));
           } finally {
-            await cleaner.dispose();
             session.conversation = undefined;
+            await Promise.all(
+              [...cleaners.values()].map((cleaner) => cleaner.dispose()),
+            );
           }
         }
       } finally {
@@ -2326,6 +2431,9 @@ export class AgentApplication {
     saved?: SavedConversation,
   ): void {
     session.localFactory = undefined;
+    if (saved)
+      session.assignment =
+        saved.assignment && structuredClone(saved.assignment);
     session.recordId = saved?.recordId ?? randomUUID();
     session.models = saved?.models?.slice();
     session.annotation = saved?.annotation
@@ -2397,6 +2505,9 @@ export class AgentApplication {
 
   private copyConversation(session: SavedConversation): SavedConversation {
     return {
+      ...(session.assignment
+        ? { assignment: structuredClone(session.assignment) }
+        : {}),
       ...(session.backend !== undefined ? { backend: session.backend } : {}),
       ...(session.recordId !== undefined ? { recordId: session.recordId } : {}),
       sessionId: session.sessionId,

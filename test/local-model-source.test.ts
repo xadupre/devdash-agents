@@ -55,6 +55,33 @@ test("GenAI directories load unchanged without Python, including with NPU", asyn
   );
 });
 
+test("model files resolve their companion configuration and reject unsupported standalone formats", async (t) => {
+  const { model, storage } = await setup(t);
+  const weights = join(model, "weights.onnx");
+  await writeFile(weights, "weights");
+  await assert.rejects(
+    prepareLocalModel(weights, storage, { provider: "cpu" }),
+    /Choose a GenAI directory/,
+  );
+  await writeFile(join(model, "genai_config.json"), "{}");
+  assert.equal(
+    await prepareLocalModel(weights, storage, { provider: "cpu" }),
+    model,
+  );
+  assert.equal(
+    await prepareLocalModel(join(model, "genai_config.json"), storage, {
+      provider: "cpu",
+    }),
+    model,
+  );
+  const gguf = join(model, "weights.gguf");
+  await writeFile(gguf, "unsupported");
+  await assert.rejects(
+    prepareLocalModel(gguf, storage, { provider: "cpu" }),
+    /Choose an ONNX/,
+  );
+});
+
 test("local checkpoints use absolute literal paths and the selected CUDA target", async (t) => {
   const { model, storage } = await setup(t);
   await writeFile(join(model, "config.json"), '{"model_type":"qwen3"}');
@@ -179,7 +206,7 @@ test("invalid sources and NPU checkpoint exports fail before invoking Python", a
       provider: "cpu",
       run,
     }),
-    /not a directory/,
+    /must contain a JSON object/,
   );
   await assert.rejects(
     prepareLocalModel("org/model", storage, { provider: "npu", run }),

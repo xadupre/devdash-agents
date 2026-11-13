@@ -742,6 +742,222 @@ declare function acquireVsCodeApi(): {
     );
     select.value = current;
   };
+  type ExecutionConfiguration = import("./execution").ExecutionConfiguration;
+  type MachineConfiguration = import("./execution").MachineConfiguration;
+  type WorkerConfiguration = import("./execution").WorkerConfiguration;
+  const machineEntry = element("machine-entry", HTMLSelectElement);
+  const workerEntry = element("worker-entry", HTMLSelectElement);
+  const machineForm = element("machine-configuration", HTMLFormElement);
+  const workerForm = element("worker-configuration", HTMLFormElement);
+  const machineFields = {
+    id: element("machine-id", HTMLInputElement),
+    name: element("machine-name", HTMLInputElement),
+    command: element("machine-command", HTMLInputElement),
+    repositoriesPath: element("machine-repositories", HTMLInputElement),
+    modelsPath: element("machine-models", HTMLInputElement),
+    workerPath: element("machine-worker", HTMLInputElement),
+    cliPath: element("machine-copilot", HTMLInputElement),
+  } satisfies Record<keyof MachineConfiguration, HTMLInputElement>;
+  const workerId = element("worker-id", HTMLInputElement);
+  const workerName = element("worker-name", HTMLInputElement);
+  const workerMachine = element("worker-machine", HTMLSelectElement);
+  const workerKind = element("worker-kind", HTMLSelectElement);
+  const workerSource = element("worker-source", HTMLInputElement);
+  const workerProvider = element("worker-provider", HTMLSelectElement);
+  const workerDevice = element("worker-device", HTMLInputElement);
+  const deleteMachine = element("delete-machine", HTMLButtonElement);
+  const deleteWorker = element("delete-worker", HTMLButtonElement);
+  const executionConfigurationStatus = element(
+    "execution-configuration-status",
+    HTMLElement,
+  );
+  const saveExecutionConfiguration = (
+    configuration: ExecutionConfiguration,
+  ): void => {
+    executionConfigurationStatus.textContent = "Saving machines and workers...";
+    vscode.postMessage({ type: "execution-configuration", configuration });
+  };
+  machineEntry.addEventListener("change", () => {
+    const machine = settingsState?.execution?.machines.find(
+      (entry) => entry.id === machineEntry.value,
+    );
+    machineForm.reset();
+    for (const key of Object.keys(
+      machineFields,
+    ) as (keyof MachineConfiguration)[])
+      machineFields[key].value =
+        machine?.[key] ??
+        (key === "workerPath"
+          ? "devdash-genai-worker"
+          : key === "cliPath"
+            ? "copilot"
+            : "");
+    machineFields.id.readOnly = !!machine;
+    machineFields.command.readOnly = machine?.id === "local";
+    deleteMachine.disabled = !machine || machine.id === "local";
+  });
+  machineForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const config = settingsState?.execution;
+    if (!config || !machineForm.reportValidity()) return;
+    const machine: MachineConfiguration = {
+      id: machineFields.id.value.trim(),
+      name: machineFields.name.value.trim(),
+      command: machineFields.command.value.trim(),
+      repositoriesPath: machineFields.repositoriesPath.value.trim(),
+      modelsPath: machineFields.modelsPath.value.trim(),
+      workerPath: machineFields.workerPath.value.trim(),
+      cliPath: machineFields.cliPath.value.trim(),
+    };
+    if (
+      !machineEntry.value &&
+      config.machines.some((entry) => entry.id === machine.id)
+    ) {
+      executionConfigurationStatus.textContent =
+        "Choose a unique machine identifier; the host/connection may be repeated.";
+      return;
+    }
+    saveExecutionConfiguration({
+      ...config,
+      machines: [
+        ...config.machines.filter((entry) => entry.id !== machine.id),
+        machine,
+      ],
+    });
+  });
+  deleteMachine.addEventListener("click", () => {
+    const config = settingsState?.execution;
+    if (!config || !machineEntry.value || machineEntry.value === "local")
+      return;
+    if (
+      config.workers.some((worker) => worker.machineId === machineEntry.value)
+    ) {
+      executionConfigurationStatus.textContent =
+        "Delete or reassign this machine's workers first.";
+      return;
+    }
+    saveExecutionConfiguration({
+      ...config,
+      machines: config.machines.filter(
+        (entry) => entry.id !== machineEntry.value,
+      ),
+    });
+  });
+  const updateWorkerKind = (): void => {
+    const copilot = workerKind.value === "copilot";
+    workerSource.required = !copilot;
+    workerProvider.disabled = copilot;
+    workerDevice.disabled = copilot;
+    const suggestions = copilot
+      ? (settingsState?.copilotModels ?? []).map((model) => ({
+          id: model.id,
+          name: model.name,
+        }))
+      : workerKind.value === "foundry"
+        ? (settingsState?.foundryCatalog?.models ?? [])
+        : [];
+    element("worker-model-suggestions", HTMLDataListElement).replaceChildren(
+      ...suggestions.map((model) => {
+        const option = document.createElement("option");
+        option.value = model.id;
+        option.label = model.name;
+        return option;
+      }),
+    );
+  };
+  workerKind.addEventListener("change", updateWorkerKind);
+  workerEntry.addEventListener("change", () => {
+    const worker = settingsState?.execution?.workers.find(
+      (entry) => entry.id === workerEntry.value,
+    );
+    workerForm.reset();
+    workerId.value = worker?.id ?? "";
+    workerId.readOnly = !!worker;
+    workerName.value = worker?.name ?? "";
+    workerMachine.value = worker?.machineId ?? "local";
+    workerKind.value = worker?.model.kind ?? "copilot";
+    workerSource.value = worker?.model.source ?? "";
+    workerProvider.value = worker?.provider ?? "cpu";
+    workerDevice.value = String(worker?.deviceId ?? 0);
+    deleteWorker.disabled = !worker;
+    updateWorkerKind();
+  });
+  workerForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const config = settingsState?.execution;
+    if (!config || !workerForm.reportValidity()) return;
+    if (
+      !workerEntry.value &&
+      config.workers.some((entry) => entry.id === workerId.value.trim())
+    ) {
+      executionConfigurationStatus.textContent =
+        "Choose a unique worker identifier.";
+      return;
+    }
+    const worker: WorkerConfiguration = {
+      id: workerId.value.trim(),
+      name: workerName.value.trim(),
+      machineId: workerMachine.value,
+      backend: workerKind.value === "copilot" ? "copilot" : "local",
+      model: {
+        kind: workerKind.value as WorkerConfiguration["model"]["kind"],
+        source: workerSource.value.trim(),
+      },
+      provider: workerProvider.value as WorkerConfiguration["provider"],
+      deviceId: Number(workerDevice.value),
+    };
+    saveExecutionConfiguration({
+      ...config,
+      workers: [
+        ...config.workers.filter((entry) => entry.id !== worker.id),
+        worker,
+      ],
+    });
+  });
+  deleteWorker.addEventListener("click", () => {
+    const config = settingsState?.execution;
+    if (!config || !workerEntry.value) return;
+    saveExecutionConfiguration({
+      ...config,
+      workers: config.workers.filter((entry) => entry.id !== workerEntry.value),
+    });
+  });
+  const renderExecutionConfiguration = (): void => {
+    const config = settingsState?.execution;
+    if (!config) return;
+    replaceOptions(
+      machineEntry,
+      [
+        { value: "", label: "Add a remote machine" },
+        ...config.machines.map((machine) => ({
+          value: machine.id,
+          label: `${machine.name} (${machine.id})`,
+        })),
+      ],
+      machineEntry.value,
+    );
+    replaceOptions(
+      workerEntry,
+      [
+        { value: "", label: "Add a worker" },
+        ...config.workers.map((worker) => ({
+          value: worker.id,
+          label: `${worker.name} - ${worker.model.source || "CLI default"} @ ${worker.machineId}`,
+        })),
+      ],
+      workerEntry.value,
+    );
+    replaceOptions(
+      workerMachine,
+      config.machines.map((machine) => ({
+        value: machine.id,
+        label: `${machine.name} (${machine.id})`,
+      })),
+      workerMachine.value || "local",
+    );
+    updateWorkerKind();
+    executionConfigurationStatus.textContent = `${config.machines.length} machine(s), ${config.workers.length} worker(s).`;
+  };
   type RemoteMachine = import("./remote").RemoteMachine;
   const executionMachine = element("execution-machine", HTMLSelectElement);
   const removeRemoteMachine = element(
@@ -831,6 +1047,7 @@ declare function acquireVsCodeApi(): {
   };
   const renderSettings = (): void => {
     const settings = settingsState;
+    renderExecutionConfiguration();
     if (settings) {
       if (!dirtyHarnessFields.has("cliPath")) cliPath.value = settings.cliPath;
       if (!dirtyHarnessFields.has("localWorkerPath"))
@@ -1538,7 +1755,7 @@ declare function acquireVsCodeApi(): {
         return [
           {
             value: session.view,
-            text: `${session.backend === "copilot" ? "Copilot" : "Local"} ${index}${session.model ? ` - ${session.model}` : ""}${session.readOnly ? " (read-only)" : ""}`,
+            text: `${session.backend === "copilot" ? "Copilot" : "Local"} ${index}${"assignment" in session && session.assignment ? ` - ${session.assignment.worker.name} | commands: ${session.assignment.executionMachine.name}` : ""}${session.model ? ` - ${session.model}` : ""}${session.readOnly ? " (read-only)" : ""}`,
           },
         ];
       },
@@ -3072,6 +3289,7 @@ declare function acquireVsCodeApi(): {
             models: import("./local-model-host").LocalModelSnapshot[];
           }
         | { type: "error"; message: string; id?: string }
+        | { type: "execution-configuration-error"; message: string }
         | {
             type: "dataset-sessions";
             sessions: DatasetSession[];
@@ -3100,6 +3318,8 @@ declare function acquireVsCodeApi(): {
     ) => {
       if (event.data.type === "state") {
         render(event.data.state);
+      } else if (event.data.type === "execution-configuration-error") {
+        executionConfigurationStatus.textContent = `Could not save machines and workers: ${event.data.message}`;
       } else if (event.data.type === "dataset-sessions") {
         renderDataset(event.data.sessions);
         if (event.data.saved) {

@@ -6,6 +6,8 @@ import {
 import { isExternalUrl } from "./links";
 import type { Repository } from "./repositories";
 import type { SavedConversation } from "./storage";
+import { machineRepositoryPath } from "./execution";
+import { remoteCommandRunner } from "./remote";
 
 export interface SessionExportSource {
   repository: Repository;
@@ -291,11 +293,15 @@ async function loadDiscussions(
 export async function exportSessionJson(
   source: SessionExportSource,
   signal: AbortSignal,
-  run: CommandRunner = runCommand,
+  run?: CommandRunner,
   onWarning?: (message: string) => void,
 ): Promise<string> {
   signal.throwIfAborted();
-  const cwd = source.repository.path;
+  const machine = source.conversation.assignment?.executionMachine;
+  const cwd = machine
+    ? machineRepositoryPath(machine, source.repository.path)
+    : source.repository.path;
+  run ??= machine?.command ? remoteCommandRunner(machine) : runCommand;
   const [commitOutput, branchOutput, remotes] = await Promise.all([
     run("git", ["rev-parse", "--verify", "HEAD^{commit}"], cwd, signal),
     run("git", ["branch", "--show-current"], cwd, signal),

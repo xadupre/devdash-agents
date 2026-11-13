@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { basename, posix } from "node:path";
 import { modelInfoFromConfig, type LocalModelInfo } from "./local-model";
+import type { CommandRunner } from "./github";
 
 /**
  * A machine reached through a connection command, such as
@@ -294,6 +295,24 @@ export function remoteError(result: RemoteResult, fallback: string): Error {
       lines.at(-1) ??
       `${fallback} (exit ${result.code ?? "signal"}).`,
   );
+}
+
+export function remoteCommandRunner(
+  machine: Pick<RemoteMachine, "command">,
+): CommandRunner {
+  return async (file, args, cwd, signal) => {
+    const result = await runRemoteScript(
+      machine,
+      'cd -- "$1" || exit; shift; export GH_PROMPT_DISABLED=1 GH_PAGER=cat GIT_PAGER=cat GIT_TERMINAL_PROMPT=0; exec "$@"',
+      [cwd, file, ...args],
+      { signal, timeoutMs: 60_000, maxOutput: 16 * 1024 * 1024 },
+    );
+    if (!result.completed || result.code !== 0)
+      throw new Error(
+        `${file}: ${remoteError(result, "Remote command failed").message}`,
+      );
+    return result.stdout.toString("utf8");
+  };
 }
 
 const REMOTE_MODEL = `fail() { printf '${REMOTE_ERROR_PREFIX}%s\\n' "$1" >&2; exit 2; }

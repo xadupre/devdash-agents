@@ -4839,6 +4839,7 @@ test("the settings panel adds, selects and removes remote execution machines", a
     machines: [machine],
     selected: "azure-vm",
   });
+
   send({ remoteMachines: [machine], remoteMachine: "azure-vm" });
   assert.deepEqual(optionsOf(select), [
     ["", "This computer"],
@@ -4861,4 +4862,95 @@ test("the settings panel adds, selects and removes remote execution machines", a
     machines: [],
     selected: "",
   });
+});
+
+test("machine and worker forms preserve independent paths, repeated hosts and one model/device", async (t) => {
+  const { dom, document, posted } = await setup(t);
+  const send = settingsSender(dom);
+  const local = {
+    id: "local",
+    name: "Local",
+    command: "",
+    repositoriesPath: "/projects",
+    modelsPath: "/models",
+    workerPath: "worker",
+    cliPath: "copilot",
+  };
+  const remote = { ...local, id: "gpu", name: "GPU", command: "ssh host" };
+  let execution: NonNullable<SettingsState["execution"]> = {
+    machines: [local, remote],
+    workers: [],
+  };
+  send({ execution });
+  const input = (id: string, value: string): void => {
+    document.querySelector<HTMLInputElement | HTMLSelectElement>(
+      `#${id}`,
+    )!.value = value;
+  };
+  for (const [id, value] of Object.entries({
+    "machine-id": "gpu-copy",
+    "machine-name": "Second entry",
+    "machine-command": "ssh host",
+    "machine-repositories": "/other/repos",
+    "machine-models": "/other/models",
+    "machine-worker": "worker",
+    "machine-copilot": "/bin/copilot",
+  }))
+    input(id, value);
+  document
+    .querySelector<HTMLFormElement>("#machine-configuration")!
+    .requestSubmit();
+  const added = posted.at(-1)!;
+  assert.equal(added.type, "execution-configuration");
+  if (added.type !== "execution-configuration") assert.fail();
+  execution = added.configuration;
+  assert.equal(execution.machines.length, 3);
+  assert.equal(execution.machines[2]!.command, remote.command);
+  send({ execution });
+  for (const [id, value] of Object.entries({
+    "worker-id": "qwen",
+    "worker-name": "Qwen CUDA",
+    "worker-machine": "gpu-copy",
+    "worker-kind": "model-id",
+    "worker-source": "Qwen/Qwen3-0.6B",
+    "worker-provider": "cuda",
+    "worker-device": "2",
+  }))
+    input(id, value);
+  document
+    .querySelector<HTMLSelectElement>("#worker-kind")!
+    .dispatchEvent(new dom.window.Event("change"));
+  document
+    .querySelector<HTMLFormElement>("#worker-configuration")!
+    .requestSubmit();
+  const saved = posted.at(-1)!;
+  assert.equal(saved.type, "execution-configuration");
+  if (saved.type !== "execution-configuration") assert.fail();
+  assert.deepEqual(saved.configuration.workers[0], {
+    id: "qwen",
+    name: "Qwen CUDA",
+    machineId: "gpu-copy",
+    backend: "local",
+    model: { kind: "model-id", source: "Qwen/Qwen3-0.6B" },
+    provider: "cuda",
+    deviceId: 2,
+  });
+  send({ execution: saved.configuration });
+  const machineEntry =
+    document.querySelector<HTMLSelectElement>("#machine-entry")!;
+  machineEntry.value = "gpu-copy";
+  machineEntry.dispatchEvent(new dom.window.Event("change"));
+  const before = posted.length;
+  document.querySelector<HTMLButtonElement>("#delete-machine")!.click();
+  assert.equal(posted.length, before);
+  assert.match(
+    document.querySelector("#execution-configuration-status")!.textContent!,
+    /reassign/,
+  );
+  machineEntry.value = "local";
+  machineEntry.dispatchEvent(new dom.window.Event("change"));
+  assert.equal(
+    document.querySelector<HTMLButtonElement>("#delete-machine")!.disabled,
+    true,
+  );
 });

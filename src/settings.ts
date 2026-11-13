@@ -3,6 +3,7 @@ import type { LocalDevice, LocalProvider } from "./local-worker";
 import { requestTimeoutMs } from "./copilot";
 import { urlOrigin } from "./permissions";
 import type { RemoteMachine } from "./remote";
+import type { ExecutionConfiguration } from "./execution";
 
 export type SettingsLoadStatus = "idle" | "loading" | "ready" | "error";
 
@@ -106,6 +107,7 @@ export function reconcileApprovedUrlOrigins(
 /** Settings shown in the webview settings panel. */
 export interface SettingsState extends HarnessSettings {
   type: "settings-state";
+  execution?: ExecutionConfiguration;
   copilotModel: string;
   copilotModels?: { id: string; name: string }[];
   copilotModelsStatus: SettingsLoadStatus;
