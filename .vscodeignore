@@ -20,8 +20,8 @@ dist/scripts/**
 **/*.map
 runtime/**
 !runtime/manifest.json
-!runtime/bin/arranged-genai-worker
-!runtime/bin/arranged-genai-worker.exe
+!runtime/bin/devdash-genai-worker
+!runtime/bin/devdash-genai-worker.exe
 !runtime/bin/onnxruntime*.dll
 !runtime/lib/libonnxruntime*.so*
 !runtime/lib/libonnxruntime*.dylib

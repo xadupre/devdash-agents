@@ -340,7 +340,7 @@ export function renderApplication(resources: {
         <label for="cli-path">Copilot CLI executable</label>
         <input id="cli-path" type="text" value="copilot" required maxlength="4096">
         <label for="local-worker-path">Local worker executable</label>
-        <input id="local-worker-path" type="text" value="arranged-genai-worker" required maxlength="4096">
+        <input id="local-worker-path" type="text" value="devdash-genai-worker" required maxlength="4096">
         <p class="repository-hint">Use trusted executables only. Executed directly without a shell. Paths apply to new Copilot sessions and new local workers; restart existing sessions to use a changed executable.</p>
         <label for="request-timeout-minutes">Request timeout (minutes)</label>
         <input id="request-timeout-minutes" type="number" value="60" min="1" max="35791" step="1" required>
@@ -377,7 +377,7 @@ export function renderApplication(resources: {
           <label for="remote-machine-command">Connection command</label>
           <input id="remote-machine-command" type="text" required maxlength="4096" placeholder="az ssh vm --ip <ip-address> --subscription 00000000-0000-0000-0000-000000000000">
           <label for="remote-worker-path">Remote worker executable</label>
-          <input id="remote-worker-path" type="text" required maxlength="4096" value="arranged-genai-worker">
+          <input id="remote-worker-path" type="text" required maxlength="4096" value="devdash-genai-worker">
           <label for="remote-model-path">Remote model directory</label>
           <input id="remote-model-path" type="text" required maxlength="4096" pattern="/.*" placeholder="/home/azureuser/models/phi-4-mini">
           <label for="remote-repositories-path">Remote repositories directory</label>

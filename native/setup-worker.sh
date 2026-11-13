@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the local model engine (build/native/arranged-genai-worker) against
+# Builds the local model engine (build/native/devdash-genai-worker) against
 # pinned, checksum-verified prebuilt ONNX Runtime GenAI SDKs. ONNX Runtime
 # itself is never compiled. Uses the CUDA SDKs when an NVIDIA GPU responds.
 set -euo pipefail
@@ -49,9 +49,9 @@ NLOHMANN_SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d
 
 # Serialize setup per checkout: downloads, extracted SDKs and the CMake tree are shared.
 mkdir -p "$ROOT/build"
-exec 9>"$ROOT/build/.arranged-worker-setup.lock"
+exec 9>"$ROOT/build/.devdash-worker-setup.lock"
 flock 9
-if [[ -x "$BUILD/arranged-genai-worker" ]]; then
+if [[ -x "$BUILD/devdash-genai-worker" ]]; then
     printf 'Local models: ready (existing worker).\n'
     exit 0
 fi
@@ -124,5 +124,5 @@ cmake -S "$ROOT/native" -B "$BUILD" -U 'GENAI_*' -U 'ORT_*' \
     -DBUILD_TESTING=OFF \
     -DGENAI_ROOT="$DEPS/$GENAI" -DONNXRUNTIME_ROOT="$DEPS/$ORT" \
     -Dnlohmann_json_DIR="$NLOHMANN/share/cmake/nlohmann_json" > /dev/null
-cmake --build "$BUILD" --target arranged-genai-worker --parallel "$(nproc)" --verbose
+cmake --build "$BUILD" --target devdash-genai-worker --parallel "$(nproc)" --verbose
 printf 'Local models: ready (%s).\n' "$VARIANT"

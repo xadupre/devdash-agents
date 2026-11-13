@@ -87,7 +87,7 @@ Stored data
 -----------
 
 Versioned snapshots use atomic, serialized writes in
-``~/.cache/arranged-agents/conversations/`` on the extension host.
+``~/.cache/devdash-agents/conversations/`` on the extension host.
 On POSIX systems, the directory is private and files use mode 0600. Snapshots
 contain plaintext conversations, tool output, attachments and drafts; they are
 not encrypted or synchronized.

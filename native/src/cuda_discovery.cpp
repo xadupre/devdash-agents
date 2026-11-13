@@ -8,7 +8,7 @@
 #define CUDA_CALL
 #endif
 
-namespace arranged {
+namespace devdash {
 namespace {
 class Library {
  public:
@@ -117,4 +117,4 @@ std::vector<Device> discoverCudaDevices(const char* testDriver, const char* test
   restore.active = false;
   return result;
 }
-}  // namespace arranged
+}  // namespace devdash

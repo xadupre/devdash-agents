@@ -12,7 +12,7 @@ import { renderResult } from "../src/render";
 
 async function main(): Promise<void> {
   const workingDirectory = await mkdtemp(
-    join(tmpdir(), "arranged-agents-smoke-"),
+    join(tmpdir(), "devdash-agents-smoke-"),
   );
   const options: CopilotOptions = {
     cliPath: process.env.ARRANGED_AGENTS_CLI_PATH ?? "copilot",

@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { discoverRepositories } from "../src/repositories";
 
 test("discovers only direct Git children, including worktrees, without following directory symlinks", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "arranged-agents-repositories-"));
+  const root = await mkdtemp(join(tmpdir(), "devdash-agents-repositories-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   for (const directory of [
     ".git",

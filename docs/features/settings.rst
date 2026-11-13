@@ -12,10 +12,10 @@ Harness settings
 ----------------
 
 The **Harness settings** form exposes the usual runtime settings for Copilot
-and local sessions: **Copilot CLI executable** (``arrangedAgents.cliPath``),
-**Local worker executable** (``arrangedAgents.localWorkerPath``), **Request
-timeout (minutes)** (``arrangedAgents.requestTimeoutMinutes``), and **Approved
-URL origins** (``arrangedAgents.approvedUrlOrigins``). Click **Save harness
+and local sessions: **Copilot CLI executable** (``devdashAgents.cliPath``),
+**Local worker executable** (``devdashAgents.localWorkerPath``), **Request
+timeout (minutes)** (``devdashAgents.requestTimeoutMinutes``), and **Approved
+URL origins** (``devdashAgents.approvedUrlOrigins``). Click **Save harness
 settings** to persist them in the usual VS Code configuration; changes made in
 VS Code also appear in the panel.
 
@@ -31,7 +31,7 @@ Copilot model
 
 **Copilot model** lists the models available through the SDK when the panel is
 first shown (**Refresh models** lists them again). The choice is saved in
-``arrangedAgents.model`` and switches open Copilot sessions from their next
+``devdashAgents.model`` and switches open Copilot sessions from their next
 message. **CLI default** applies to sessions opened afterwards.
 
 Local model
@@ -64,7 +64,7 @@ RAM, disk space and download time. A cancellable notification is shown during
 preparation.
 
 Successful exports are kept under ``models/`` in the extension's global storage.
-The prepared directory is saved in ``arrangedAgents.localModelPath`` and reused
+The prepared directory is saved in ``devdashAgents.localModelPath`` and reused
 without exporting again when a local model is next loaded. Cancelling or failing
 preparation removes the incomplete export and leaves the previous selection
 unchanged. Select the original checkpoint again to export updated weights.
@@ -85,7 +85,7 @@ status reports how many were left out as unsupported.
 The complete package, including external weights and tokenizer files, is
 downloaded into ``foundry/`` under the extension's global storage, then the
 directory containing ``genai_config.json`` is saved as
-``arrangedAgents.localModelPath``. Complete cached packages are reused without
+``devdashAgents.localModelPath``. Complete cached packages are reused without
 downloading again. Progress is shown in the panel and a cancellable
 notification; **Cancel** or a failure never leaves an incomplete cache entry and
 keeps the previous local model.
@@ -124,8 +124,8 @@ deletes the selected machine. A remote machine has:
   ``<repositories directory>/<local repository folder name>``, which must be a
   clone of the repository.
 
-The machines are saved in ``arrangedAgents.remoteMachines`` and the selection in
-``arrangedAgents.remoteMachine``. The selection applies to local sessions opened
+The machines are saved in ``devdashAgents.remoteMachines`` and the selection in
+``devdashAgents.remoteMachine``. The selection applies to local sessions opened
 afterwards; Copilot sessions are unchanged. With a remote machine, the worker,
 **Detect devices**, and the ``read_file``, ``search_files``, ``edit_file`` and
 ``run_command`` tools all run on that machine through the connection command,
@@ -142,15 +142,15 @@ Local session device
 **Local session device** chooses the device used by local models. **Detect
 devices** queries the installed engine (installing it first if needed) and lists
 the detected CPUs and GPUs; **Automatic (prefer CUDA)** is always available.
-The choice is saved in ``arrangedAgents.localProvider`` and
-``arrangedAgents.localDeviceId``. It selects the device for the next local
+The choice is saved in ``devdashAgents.localProvider`` and
+``devdashAgents.localDeviceId``. It selects the device for the next local
 model load. Move a loaded shared model between devices, or unload it to DISK,
 in the **Sessions** panel; moving or unloading discards all local KV caches.
 
 Request timeout
 ---------------
 
-``arrangedAgents.requestTimeoutMinutes`` sets the total deadline for a Copilot
+``devdashAgents.requestTimeoutMinutes`` sets the total deadline for a Copilot
 operation and defaults to 60 minutes. The deadline includes model generation,
 tool execution, permission and question waits, and crash-recovery delays.
 Activity does not reset it.
@@ -163,7 +163,7 @@ deadline. **Cancel** remains available at any time.
 Copilot executable
 ------------------
 
-Set ``arrangedAgents.cliPath`` to the absolute Copilot CLI path when the extension
+Set ``devdashAgents.cliPath`` to the absolute Copilot CLI path when the extension
 cannot find ``copilot`` on ``PATH``. This is a machine-scoped setting.
 
 In Remote SSH, WSL and dev containers, the executable must be installed and
@@ -172,26 +172,26 @@ authenticated on the machine that runs the workspace extension.
 Model
 -----
 
-``arrangedAgents.model`` is a supported model identifier, chosen with **Copilot
+``devdashAgents.model`` is a supported model identifier, chosen with **Copilot
 model** in the settings panel. Leaving it empty uses the Copilot CLI default.
 
 Local inference
 ---------------
 
-``arrangedAgents.localWorkerPath`` is the native worker executable. By default,
+``devdashAgents.localWorkerPath`` is the native worker executable. By default,
 the worker built in the extension's ``build/native`` directory is used, then
-``arranged-genai-worker`` on ``PATH``. It is executed directly, without a shell.
+``devdash-genai-worker`` on ``PATH``. It is executed directly, without a shell.
 Under WSL, ``/usr/lib/wsl/lib`` is put first in the worker's ``LD_LIBRARY_PATH``
 so CUDA finds the WSL GPU driver.
 Only configure a trusted executable and model source.
-``arrangedAgents.localModelPath`` accepts a GenAI directory, a Transformers
+``devdashAgents.localModelPath`` accepts a GenAI directory, a Transformers
 checkpoint directory or a Hugging Face model ID. Selecting a source through
 **Choose local model...** saves its prepared GenAI directory. If a Transformers
 source is entered directly in VS Code configuration, it is prepared when opening
 a local session and reused for that application lifetime. Hub IDs download the
 specified model during preparation; models are never substituted automatically.
-``arrangedAgents.localProvider`` selects ``auto``, ``cuda``, ``npu`` or ``cpu``.
-``arrangedAgents.localDeviceId`` selects a runtime device ID, or ``-1`` for
+``devdashAgents.localProvider`` selects ``auto``, ``cuda``, ``npu`` or ``cpu``.
+``devdashAgents.localDeviceId`` selects a runtime device ID, or ``-1`` for
 automatic selection. These settings are machine-scoped.
 See :doc:`sessions` for the local-session controls and :doc:`../development`
 for the native runtime build requirements.

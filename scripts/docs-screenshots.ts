@@ -9,7 +9,7 @@ import { ConversationRenderer, renderApplication } from "../src/render";
 
 const root = join(__dirname, "../..");
 const output = join(root, "docs/images");
-const origin = "https://arranged-agents.invalid";
+const origin = "https://devdash-agents.invalid";
 const theme = `
 :root {
   color-scheme: dark;
@@ -49,12 +49,12 @@ const theme = `
 
 const state: ApplicationState = {
   root: "/projects",
-  activeId: "arranged-agents",
+  activeId: "devdash-agents",
   repositories: [
     {
-      id: "arranged-agents",
-      name: "arranged-agents",
-      path: "/projects/arranged-agents",
+      id: "devdash-agents",
+      name: "devdash-agents",
+      path: "/projects/devdash-agents",
       status: "ready",
       sessionCount: 3,
       generatedTokens: 2840,
@@ -120,17 +120,17 @@ Equations render locally, too: $E = mc^2$.`,
 
 const activity: GitHubUpdate = {
   type: "github",
-  id: "arranged-agents",
+  id: "devdash-agents",
   section: "issues",
   status: "ready",
   append: false,
   page: {
-    repository: "example/arranged-agents",
+    repository: "example/devdash-agents",
     items: [
       {
         id: "42",
         title: "#42 Document the workspace",
-        url: "https://github.com/example/arranged-agents/issues/42",
+        url: "https://github.com/example/devdash-agents/issues/42",
         author: "demo-user",
         date: "2026-01-15T10:00:00Z",
         mine: true,
@@ -140,7 +140,7 @@ const activity: GitHubUpdate = {
       {
         id: "38",
         title: "#38 Preserve repository drafts",
-        url: "https://github.com/example/arranged-agents/issues/38",
+        url: "https://github.com/example/devdash-agents/issues/38",
         author: "demo-contributor",
         date: "2026-01-14T09:00:00Z",
         mine: false,
@@ -265,7 +265,7 @@ async function main(): Promise<void> {
     await page.locator('#right-tabs [data-view="repositories"]').click();
     await capture("conversations", "#chat-panel");
     await page
-      .locator('[data-repository-id="arranged-agents"]')
+      .locator('[data-repository-id="devdash-agents"]')
       .press("Shift+F10");
     await capture(
       "sessions",
@@ -297,7 +297,7 @@ async function main(): Promise<void> {
     state.permissions = [
       {
         id: "demo-permission",
-        repositoryId: "arranged-agents",
+        repositoryId: "devdash-agents",
         kind: "shell",
         summary: "Publish the documentation commit",
         content: "git push origin docs-screenshots",

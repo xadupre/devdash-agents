@@ -2,7 +2,7 @@
 
 #include <charconv>
 
-namespace arranged {
+namespace devdash {
 std::optional<Device> verifiedQnnNpu(const std::string& epName, bool hardwareIsNpu,
                                      const ProviderOptions& options, const std::string& name) {
   if (epName != "QNNExecutionProvider" || !hardwareIsNpu) return {};
@@ -18,4 +18,4 @@ std::optional<Device> verifiedQnnNpu(const std::string& epName, bool hardwareIsN
     return {};
   return Device{"npu", ordinal, name.empty() ? "Qualcomm QNN HTP NPU" : name};
 }
-}  // namespace arranged
+}  // namespace devdash

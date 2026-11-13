@@ -1062,7 +1062,7 @@ test("local repository edits use the application permission controls", async (t)
   const file = join(alpha, "notes.txt");
   await writeFile(file, "before\n");
   const toolCall =
-    '<arranged_tool_call>{"name":"edit_file","arguments":{"path":"notes.txt","oldText":"before","newText":"after"}}</arranged_tool_call>';
+    '<devdash_tool_call>{"name":"edit_file","arguments":{"path":"notes.txt","oldText":"before","newText":"after"}}</devdash_tool_call>';
   const worker = {
     load: async () => ({ provider: "cpu" as const, deviceId: 0, name: "CPU" }),
     generateChat: async (
@@ -1416,7 +1416,7 @@ async function setup(
   scenario = "conversation",
   timeoutMs = 5_000,
 ) {
-  const root = await mkdtemp(join(tmpdir(), "arranged-agents-application-"));
+  const root = await mkdtemp(join(tmpdir(), "devdash-agents-application-"));
   for (const name of ["alpha", "beta"]) {
     await mkdir(join(root, name, ".git"), { recursive: true });
     await writeFile(join(root, name, "scenario"), scenario);

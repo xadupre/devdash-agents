@@ -132,7 +132,7 @@ test("cancelling engine setup terminates its subprocess group", async (t) => {
     t.skip("Installer setup is supported on Linux");
     return;
   }
-  const directory = mkdtempSync(join(tmpdir(), "arranged-worker-"));
+  const directory = mkdtempSync(join(tmpdir(), "devdash-worker-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const pidFile = join(directory, "child.pid");
   const controller = new AbortController();
@@ -177,7 +177,7 @@ test("finds an executable worker on PATH", (t) => {
     t.skip("Uses POSIX executable permissions");
     return;
   }
-  const directory = mkdtempSync(join(tmpdir(), "arranged-worker-path-"));
+  const directory = mkdtempSync(join(tmpdir(), "devdash-worker-path-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const executable = join(directory, DEFAULT_WORKER);
   symlinkSync(process.execPath, executable);
@@ -186,21 +186,21 @@ test("finds an executable worker on PATH", (t) => {
 });
 
 test("explains how to configure a missing worker executable", async (t) => {
-  const client = new LocalWorker("/__arranged_missing_worker__");
+  const client = new LocalWorker("/__devdash_missing_worker__");
   t.after(() => client.stop());
   await assert.rejects(
     client.discover(),
-    /Local models are not installed on this computer \(missing: \/__arranged_missing_worker__\)\. Automatic installation is available/,
+    /Local models are not installed on this computer \(missing: \/__devdash_missing_worker__\)\. Automatic installation is available/,
   );
 });
 
 test("uses the worker built in the extension tree unless a path is configured", () => {
-  const built = join("/ext", "build", "native", "arranged-genai-worker");
+  const built = join("/ext", "build", "native", "devdash-genai-worker");
   const present = (path: string) => path === built;
   if (process.platform !== "win32") {
     assert.equal(resolveWorkerExecutable("", "/ext", present), built);
     assert.equal(
-      resolveWorkerExecutable("arranged-genai-worker", "/ext", present),
+      resolveWorkerExecutable("devdash-genai-worker", "/ext", present),
       built,
     );
   }
@@ -210,7 +210,7 @@ test("uses the worker built in the extension tree unless a path is configured", 
   );
   assert.equal(
     resolveWorkerExecutable("", "/ext", () => false),
-    "arranged-genai-worker",
+    "devdash-genai-worker",
   );
 });
 

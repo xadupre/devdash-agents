@@ -21,10 +21,10 @@ import {
 } from "../src/local-tools";
 
 const response = (call: unknown): string =>
-  `<arranged_tool_call>${JSON.stringify(call)}</arranged_tool_call>`;
+  `<devdash_tool_call>${JSON.stringify(call)}</devdash_tool_call>`;
 
 async function repository(t: TestContext): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "arranged-local-tools-"));
+  const root = await mkdtemp(join(tmpdir(), "devdash-local-tools-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
@@ -158,14 +158,14 @@ test("local tool requests require exact JSON schemas and reject malformed calls"
     { name: "read_file", arguments: { path: "README.md" } },
   );
   for (const text of [
-    "<arranged_tool_call>{bad}</arranged_tool_call>",
-    "<arranged_tool_call>",
-    "</arranged_tool_call>",
+    "<devdash_tool_call>{bad}</devdash_tool_call>",
+    "<devdash_tool_call>",
+    "</devdash_tool_call>",
     "<tool_call>",
     "</tool_call>",
     '{"name":"read_file","arguments":{"path":"README.md"},"extra":true}',
     '{"name":"unsupported","arguments":{}}',
-    '<tool_call>{"name":"read_file","arguments":{"path":"README.md"}}</arranged_tool_call>',
+    '<tool_call>{"name":"read_file","arguments":{"path":"README.md"}}</devdash_tool_call>',
     response({ name: "read_file", arguments: { path: "a", extra: true } }),
     response({ name: "unsupported", arguments: {} }),
     response({
@@ -181,7 +181,7 @@ test("local tool envelopes can omit one tag but must still contain exactly one v
   const json = '{"name":"read_file","arguments":{"path":"README.md"}}';
   for (const [open, close] of [
     ["<tool_call>", "</tool_call>"],
-    ["<arranged_tool_call>", "</arranged_tool_call>"],
+    ["<devdash_tool_call>", "</devdash_tool_call>"],
   ]) {
     for (const text of [open + json, json + close, open + json + close]) {
       assert.deepEqual(parseLocalToolCall(text), {
@@ -649,8 +649,8 @@ test("invalid streamed framing rejects the turn without throwing into the worker
 test("unfinished reasoning and invalid tool requests after reasoning never execute tools", async (t) => {
   const root = await repository(t);
   for (const content of [
-    '<think>still thinking <arranged_tool_call>{"name":"run_command"}',
-    '<think>done</think><arranged_tool_call>{"name":"unsupported","arguments":{}}</arranged_tool_call>',
+    '<think>still thinking <devdash_tool_call>{"name":"run_command"}',
+    '<think>done</think><devdash_tool_call>{"name":"unsupported","arguments":{}}</devdash_tool_call>',
     `<think>done</think>prose ${response({ name: "read_file", arguments: { path: "README.md" } })}`,
   ]) {
     let executions = 0;

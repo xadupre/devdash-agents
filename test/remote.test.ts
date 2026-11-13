@@ -32,13 +32,13 @@ const machine: RemoteMachine = {
   name: "azure-vm",
   command:
     "az ssh vm --ip 192.0.2.10 --subscription 00000000-0000-0000-0000-000000000001",
-  workerPath: "arranged-genai-worker",
+  workerPath: "devdash-genai-worker",
   modelPath: "/home/azureuser/models/phi",
   repositoriesPath: "/home/azureuser/github",
 };
 
 async function directory(t: TestContext): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "arranged-remote-"));
+  const root = await mkdtemp(join(tmpdir(), "devdash-remote-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
@@ -65,8 +65,8 @@ test("remote invocations quote the remote command after the connection arguments
   ]);
   assert.throws(() => splitCommandLine(`ssh "host`), /Unterminated/);
   assert.equal(
-    remoteRepositoryPath(machine, "/local/src/arranged-agents"),
-    "/home/azureuser/github/arranged-agents",
+    remoteRepositoryPath(machine, "/local/src/devdash-agents"),
+    "/home/azureuser/github/devdash-agents",
   );
 });
 

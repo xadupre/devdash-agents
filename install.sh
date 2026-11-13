@@ -2,7 +2,7 @@
 # Installs the latest Arranged Agents release matching this machine into VS Code.
 set -euo pipefail
 
-REPO="xadupre/arranged-agents"
+REPO="xadupre/devdash-agents"
 CODE="${CODE:-code}"
 
 case "$(uname -s)" in
@@ -29,7 +29,7 @@ if [ "$platform" != darwin ] && command -v nvidia-smi > /dev/null 2>&1 && nvidia
   variant=cuda
 fi
 
-asset="arranged-agents-${target}-${variant}.vsix"
+asset="devdash-agents-${target}-${variant}.vsix"
 url="https://github.com/${REPO}/releases/latest/download/${asset}"
 
 if ! command -v "$CODE" > /dev/null 2>&1; then

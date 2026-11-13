@@ -7,7 +7,7 @@
 #include "provider_policy.h"
 #include "worker.h"
 
-using namespace arranged;
+using namespace devdash;
 using namespace std::chrono_literals;
 namespace {
 void require(bool condition, const char* message) {

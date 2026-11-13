@@ -15,7 +15,7 @@ import { ApplicationStorage, type SavedApplication } from "../src/storage";
 import { testImage } from "./helpers";
 
 async function setup(t: TestContext) {
-  const directory = await mkdtemp(join(tmpdir(), "arranged-agents-storage-"));
+  const directory = await mkdtemp(join(tmpdir(), "devdash-agents-storage-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const snapshot: SavedApplication = {
     version: 1,
@@ -54,7 +54,7 @@ test("history saves are atomic, serialized, private and isolated by launch root"
   const storage = new ApplicationStorage(directory, snapshot.root);
   assert.equal(
     dirname(storage.filename),
-    join(directory, ".cache", "arranged-agents", "conversations"),
+    join(directory, ".cache", "devdash-agents", "conversations"),
   );
   assert.equal(await storage.load(), undefined);
   const later = {

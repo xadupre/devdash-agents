@@ -9,7 +9,7 @@ import {
 } from "../src/local-model-source";
 
 async function setup(t: TestContext) {
-  const root = await mkdtemp(join(tmpdir(), "arranged-model-source-"));
+  const root = await mkdtemp(join(tmpdir(), "devdash-model-source-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const model = join(root, "checkpoint with spaces;literal");
   await mkdir(model);

@@ -15,7 +15,7 @@ verify = runpy.run_path(str(Path(__file__).parents[1] / "verify-package.py"))["v
 class PackageTests(unittest.TestCase):
     def package(self, directory, extra):
         target = ("win32" if os.name == "nt" else sys.platform) + "-x64"
-        executable = "arranged-genai-worker.exe" if os.name == "nt" else "arranged-genai-worker"
+        executable = "devdash-genai-worker.exe" if os.name == "nt" else "devdash-genai-worker"
         path = Path(directory) / "test.vsix"
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr("extension/runtime/manifest.json", json.dumps({
@@ -34,7 +34,7 @@ class PackageTests(unittest.TestCase):
 
     def test_build_files_and_models_are_rejected(self):
         for name in (
-            "extension/build/native/arranged-genai-worker",
+            "extension/build/native/devdash-genai-worker",
             "extension/native/src/worker.h",
             "extension/models/model.onnx",
             "extension/models/genai_config.json",

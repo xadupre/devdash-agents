@@ -46,7 +46,7 @@ function catalogEntry(
 
 /** Serves the catalogue, registry and blob container from 127.0.0.1. */
 async function foundryServer(t: TestContext) {
-  const root = await mkdtemp(join(tmpdir(), "arranged-agents-foundry-"));
+  const root = await mkdtemp(join(tmpdir(), "devdash-agents-foundry-"));
   const files = new Map<string, Buffer>([
     ["v1/genai_config.json", Buffer.from('{"model":{"context_length":4096}}')],
     ["v1/model.onnx", Buffer.from("graph")],
@@ -242,7 +242,7 @@ test("Foundry Local downloads the complete package and returns the GenAI model d
   assert.equal(await downloadFoundryModel(asset, hub.root, hub), directory);
   assert.equal(hub.requests.length, count);
   const manifest = await readFile(
-    join(directory, "..", ".arranged-download.json"),
+    join(directory, "..", ".devdash-download.json"),
     "utf8",
   );
   assert.equal(manifest.includes("fixture-signature"), false);

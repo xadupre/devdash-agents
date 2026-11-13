@@ -51,9 +51,9 @@ jobs:
           ARRANGED_TEST_MODEL_HAS_CHAT_TEMPLATE: "1"
       - run: npm run check
       - run: npm audit --audit-level=high
-      - run: npm run package -- --target ${{ matrix.target }} --out build/arranged-agents-${{ matrix.target }}-${{ matrix.variant }}.vsix
+      - run: npm run package -- --target ${{ matrix.target }} --out build/devdash-agents-${{ matrix.target }}-${{ matrix.variant }}.vsix
       # Hosted runners have no NVIDIA GPU; both runtime variants must work on CPU.
-      - run: python native/verify-package.py build/arranged-agents-${{ matrix.target }}-${{ matrix.variant }}.vsix
+      - run: python native/verify-package.py build/devdash-agents-${{ matrix.target }}-${{ matrix.variant }}.vsix
         env:
           ARRANGED_TEST_MODEL_DIR: ${{ github.workspace }}/build/native-deps/model-chat
           ARRANGED_TEST_MODEL_HAS_CHAT_TEMPLATE: "1"

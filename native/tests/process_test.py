@@ -68,10 +68,10 @@ def main():
             send({"id": "chat", "method": "generate", "messages": [{"role": "user", "content": "hi"}]})
             assert receive("chat", "error")["code"] == "model_not_loaded"
             send({"id": "l", "method": "load", "provider": "cpu",
-                  "modelPath": "/__arranged_nonexistent_model__"})
+                  "modelPath": "/__devdash_nonexistent_model__"})
             assert receive("l", "error")["code"] == "load_failed"
             send({"id": "auto", "method": "load", "provider": "auto",
-                  "modelPath": "/__arranged_nonexistent_model__"})
+                  "modelPath": "/__devdash_nonexistent_model__"})
             assert receive("auto", "error")["code"] == "load_failed"
             if "npu" not in present:
                 send({"id": "n", "method": "load", "provider": "npu", "modelPath": "unused"})

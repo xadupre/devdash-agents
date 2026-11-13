@@ -22,7 +22,7 @@ async function setup(
   t: TestContext,
   options: { installed?: boolean; desktop?: boolean; npm?: boolean } = {},
 ) {
-  const directory = await mkdtemp(join(tmpdir(), "arranged-agents-launcher-"));
+  const directory = await mkdtemp(join(tmpdir(), "devdash-agents-launcher-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const root = join(directory, "checkout with spaces");
   const tools = join(directory, "tools");

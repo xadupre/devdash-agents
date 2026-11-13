@@ -13,7 +13,7 @@
 #error "ONNX Runtime GenAI v0.19.0 requires compatible ORT headers (API >= 26)"
 #endif
 
-namespace arranged {
+namespace devdash {
 namespace {
 // API signatures verified against:
 // https://github.com/microsoft/onnxruntime-genai/blob/v0.19.0/src/ort_genai_c.h
@@ -53,7 +53,7 @@ class GenaiBackend final : public Backend {
     api_ = OrtGetApiBase()->GetApi(26);
     if (!api_) throw Error("runtime_unavailable", "ONNX Runtime API 26 is not available");
     environment_.api = api_;
-    ortCheck(api_->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "arranged-genai-worker", &environment_.value));
+    ortCheck(api_->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "devdash-genai-worker", &environment_.value));
     check(OgaSetLogCallback([](const char* text, size_t length) {
       std::cerr.write(text, static_cast<std::streamsize>(length));
     }));
@@ -450,4 +450,4 @@ class GenaiBackend final : public Backend {
 };
 }  // namespace
 std::unique_ptr<Backend> makeBackend() { return std::make_unique<GenaiBackend>(); }
-}  // namespace arranged
+}  // namespace devdash

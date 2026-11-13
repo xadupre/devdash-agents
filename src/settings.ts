@@ -61,7 +61,7 @@ export function parseHarnessSettingsPatch(
     throw new Error("Invalid harness settings.");
   const parsed = parseHarnessSettings({
     cliPath: "copilot",
-    localWorkerPath: "arranged-genai-worker",
+    localWorkerPath: "devdash-genai-worker",
     requestTimeoutMinutes: 60,
     approvedUrlOrigins: [],
     ...value,

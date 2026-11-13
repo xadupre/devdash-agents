@@ -143,8 +143,8 @@ export function remoteRepositoryPath(
 // Some connection commands, such as `az ssh vm`, do not return the remote exit
 // status, so the script reports it as its last stderr line.
 const REMOTE_STATUS_WRAPPER =
-  'script=$1; shift; sh -c "$script" sh "$@"; printf \'\\narranged-exit: %d\\n\' "$?" >&2';
-const REMOTE_STATUS = /^arranged-exit: (\d+)\r?$/gm;
+  'script=$1; shift; sh -c "$script" sh "$@"; printf \'\\ndevdash-exit: %d\\n\' "$?" >&2';
+const REMOTE_STATUS = /^devdash-exit: (\d+)\r?$/gm;
 
 export interface RemoteResult {
   /** False when the remote script never reported its status, e.g. a connection failure. */
@@ -275,7 +275,7 @@ export function runRemoteScript(
   });
 }
 
-export const REMOTE_ERROR_PREFIX = "arranged-error: ";
+export const REMOTE_ERROR_PREFIX = "devdash-error: ";
 
 /**
  * Prefers the message a remote script reported with REMOTE_ERROR_PREFIX over

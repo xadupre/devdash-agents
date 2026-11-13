@@ -304,7 +304,7 @@ export class GitHubRepository {
       target,
       signal,
     );
-    const directory = await mkdtemp(join(tmpdir(), "arranged-github-comment-"));
+    const directory = await mkdtemp(join(tmpdir(), "devdash-github-comment-"));
     try {
       const input = join(directory, "comment.json");
       await writeFile(input, JSON.stringify({ body }), { mode: 0o600 });

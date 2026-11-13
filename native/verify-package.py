@@ -17,7 +17,7 @@ def verify(filename):
         manifest = json.loads(archive.read("extension/runtime/manifest.json"))
         target = manifest["target"]
         platform = target.split("-")[0]
-        executable = "arranged-genai-worker.exe" if platform == "win32" else "arranged-genai-worker"
+        executable = "devdash-genai-worker.exe" if platform == "win32" else "devdash-genai-worker"
         libraries = {
             "win32": ("bin/onnxruntime*.dll",),
             "darwin": ("lib/libonnxruntime*.dylib",),
@@ -54,7 +54,7 @@ def verify(filename):
             "/licenses/onnxruntime-" in name for name in runtime
         ):
             raise ValueError("The native bundle is missing upstream licenses")
-        with tempfile.TemporaryDirectory(prefix="arranged-vsix-") as directory:
+        with tempfile.TemporaryDirectory(prefix="devdash-vsix-") as directory:
             for name in runtime:
                 archive.extract(name, directory)
             worker = Path(directory) / worker_name

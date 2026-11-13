@@ -23,7 +23,7 @@ import {
 
 export const LOCAL_TOOL_MARKERS = [
   ["<tool_call>", "</tool_call>"],
-  ["<arranged_tool_call>", "</arranged_tool_call>"],
+  ["<devdash_tool_call>", "</devdash_tool_call>"],
 ] as const;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_READ_BYTES = 256 * 1024;

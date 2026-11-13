@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(arranged_native_worker VERSION 1.0 LANGUAGES CXX)
+project(devdash_native_worker VERSION 1.0 LANGUAGES CXX)
 
 option(ARRANGED_WITH_GENAI "Build the real ONNX Runtime GenAI backend" ON)
 set(GENAI_ROOT "" CACHE PATH "Extracted ONNX Runtime GenAI v0.19.0 SDK")
@@ -17,25 +17,25 @@ else()
   target_compile_options(worker_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-add_executable(arranged-genai-worker src/main.cpp)
-target_link_libraries(arranged-genai-worker PRIVATE worker_core)
+add_executable(devdash-genai-worker src/main.cpp)
+target_link_libraries(devdash-genai-worker PRIVATE worker_core)
 if(ARRANGED_WITH_GENAI)
   find_path(GENAI_INCLUDE_DIR ort_genai_c.h HINTS "${GENAI_ROOT}/include" REQUIRED)
   find_library(GENAI_LIBRARY NAMES onnxruntime-genai HINTS "${GENAI_ROOT}/lib" REQUIRED)
   find_path(ORT_INCLUDE_DIR onnxruntime_c_api.h HINTS "${ONNXRUNTIME_ROOT}/include" REQUIRED)
   find_library(ORT_LIBRARY NAMES onnxruntime HINTS "${ONNXRUNTIME_ROOT}/lib" REQUIRED)
-  target_sources(arranged-genai-worker PRIVATE src/genai_backend.cpp)
-  target_include_directories(arranged-genai-worker PRIVATE "${GENAI_INCLUDE_DIR}" "${ORT_INCLUDE_DIR}")
-  target_link_libraries(arranged-genai-worker PRIVATE "${GENAI_LIBRARY}" "${ORT_LIBRARY}" ${CMAKE_DL_LIBS})
+  target_sources(devdash-genai-worker PRIVATE src/genai_backend.cpp)
+  target_include_directories(devdash-genai-worker PRIVATE "${GENAI_INCLUDE_DIR}" "${ORT_INCLUDE_DIR}")
+  target_link_libraries(devdash-genai-worker PRIVATE "${GENAI_LIBRARY}" "${ORT_LIBRARY}" ${CMAKE_DL_LIBS})
   # GenAI loads ORT itself. Keep both SDKs on the executable's runtime search path.
   get_filename_component(GENAI_LIB_DIR "${GENAI_LIBRARY}" DIRECTORY)
   get_filename_component(ORT_LIB_DIR "${ORT_LIBRARY}" DIRECTORY)
-  set_target_properties(arranged-genai-worker PROPERTIES
+  set_target_properties(devdash-genai-worker PROPERTIES
     BUILD_RPATH "${GENAI_LIB_DIR};${ORT_LIB_DIR}")
   if(APPLE)
-    set_target_properties(arranged-genai-worker PROPERTIES INSTALL_RPATH "@loader_path/../lib")
+    set_target_properties(devdash-genai-worker PROPERTIES INSTALL_RPATH "@loader_path/../lib")
   else()
-    set_target_properties(arranged-genai-worker PROPERTIES INSTALL_RPATH "$ORIGIN;$ORIGIN/../lib")
+    set_target_properties(devdash-genai-worker PROPERTIES INSTALL_RPATH "$ORIGIN;$ORIGIN/../lib")
   endif()
   if(WIN32)
     file(GLOB GENAI_RUNTIME_LIBRARIES "${GENAI_LIB_DIR}/onnxruntime-genai*.dll")
@@ -54,7 +54,7 @@ if(ARRANGED_WITH_GENAI)
     message(FATAL_ERROR "Both SDKs must contain their platform runtime libraries")
   endif()
 else()
-  target_sources(arranged-genai-worker PRIVATE src/unavailable_backend.cpp)
+  target_sources(devdash-genai-worker PRIVATE src/unavailable_backend.cpp)
 endif()
 
 include(CTest)
@@ -77,7 +77,7 @@ if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
   add_test(NAME worker-process-protocol
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/process_test.py"
-            "$<TARGET_FILE:arranged-genai-worker>"
+            "$<TARGET_FILE:devdash-genai-worker>"
             "$<IF:$<BOOL:${ARRANGED_WITH_GENAI}>,runtime,no-runtime>")
   add_test(NAME worker-package-validation
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/package_test.py")
@@ -85,4 +85,4 @@ if(BUILD_TESTING)
   # Covers the optional real-model load (300 s) and generation steps.
   set_tests_properties(worker-process-protocol PROPERTIES TIMEOUT 900)
 endif()
-install(TARGETS arranged-genai-worker RUNTIME DESTINATION bin)
+install(TARGETS devdash-genai-worker RUNTIME DESTINATION bin)

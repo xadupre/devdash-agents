@@ -49,7 +49,7 @@ CUDA packages additionally require an NVIDIA GPU and compatible driver, CUDA 13
 and cuDNN 9 on the extension host. These NVIDIA dependencies are not bundled.
 CPU variants need no CUDA installation. Unsupported providers fail explicitly.
 
-NPU support remains external: configure ``arrangedAgents.localWorkerPath`` with
+NPU support remains external: configure ``devdashAgents.localWorkerPath`` with
 a trusted worker implementing the :doc:`native protocol <development>` and
 install its vendor runtime separately. There is no bundled NPU, Intel macOS,
 Linux arm64 or Windows arm64 variant with the pinned SDKs.
@@ -210,7 +210,7 @@ an error is shown; **New** explicitly starts fresh while archiving the previous
 conversation instead of replaying it to the model.
 
 History is stored in private, unencrypted JSON files under
-``~/.cache/arranged-agents/conversations/`` on the extension host, outside the
+``~/.cache/devdash-agents/conversations/`` on the extension host, outside the
 repositories.
 
 Manage sessions with the repository menu
@@ -350,7 +350,7 @@ opens the Arranged Agents settings page in VS Code. No repository session needs
 to be started.
 VS Code persists the selected user or workspace settings.
 
-``arrangedAgents.requestTimeoutMinutes`` sets the maximum total duration of a
+``devdashAgents.requestTimeoutMinutes`` sets the maximum total duration of a
 Copilot operation, with a default of **60 minutes (one hour)**. It includes model
 generation, tool execution, permission/question waits and crash recovery delays;
 activity does not reset the deadline. The setting applies to main and parallel
@@ -358,7 +358,7 @@ agents and each PostMortem analysis request. Positive whole minutes are required
 Changes affect subsequent operations, including in sessions already open; an
 operation in progress retains its original deadline. **Cancel** remains available.
 
-Set ``arrangedAgents.cliPath`` to the absolute path of your CLI if it cannot be
+Set ``devdashAgents.cliPath`` to the absolute path of your CLI if it cannot be
 found on ``PATH``. This is a machine-scoped setting. Choose the Copilot model, the
 local model and its device in the **Settings** panel; the CLI default model is
 used until a model is chosen.
@@ -373,7 +373,7 @@ Install a VSIX
 
    npm ci
    npm run package
-   code --install-extension ./arranged-agents-0.1.0.vsix
+   code --install-extension ./devdash-agents-0.1.0.vsix
 
 Alternatively use **Extensions: Install from VSIX** in VS Code. GitHub releases
 created by the release workflow attach a VSIX; they do not publish to the

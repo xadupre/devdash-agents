@@ -4,8 +4,8 @@
 
 int main() {
   try {
-    arranged::Worker worker(arranged::makeBackend, [](const arranged::Json& response) {
-      std::cout << response.dump(-1, ' ', false, arranged::Json::error_handler_t::replace) << '\n'
+    devdash::Worker worker(devdash::makeBackend, [](const devdash::Json& response) {
+      std::cout << response.dump(-1, ' ', false, devdash::Json::error_handler_t::replace) << '\n'
                 << std::flush;
     });
     worker.run(std::cin);

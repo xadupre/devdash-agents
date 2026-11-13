@@ -27,7 +27,7 @@ export function requestTimeoutMs(
     minutes > maximum
   ) {
     throw new Error(
-      `Set arrangedAgents.requestTimeoutMinutes to a whole number between 1 and ${maximum}.`,
+      `Set devdashAgents.requestTimeoutMinutes to a whole number between 1 and ${maximum}.`,
     );
   }
   return minutes * 60_000;
@@ -86,7 +86,7 @@ async function resolveCliPath(
     }
   }
   throw new Error(
-    `Copilot CLI executable not found or not executable: ${cliPath}. Set arrangedAgents.cliPath to its absolute path.`,
+    `Copilot CLI executable not found or not executable: ${cliPath}. Set devdashAgents.cliPath to its absolute path.`,
   );
 }
 
@@ -95,7 +95,7 @@ export async function createCopilotClient(
 ): Promise<CopilotClient> {
   if (!options.cliPath.trim()) {
     throw new Error(
-      "Set arrangedAgents.cliPath to your Copilot CLI executable.",
+      "Set devdashAgents.cliPath to your Copilot CLI executable.",
     );
   }
   const { CopilotClient, RuntimeConnection } =

@@ -80,7 +80,7 @@ test("framing tokens inside JSON and XML tool arguments remain literal", () => {
     const json = JSON.stringify(call);
     for (const text of [
       `<tool_call>${json}</tool_call><|im_end|>`,
-      `<arranged_tool_call>${json}</arranged_tool_call><|im_end|>`,
+      `<devdash_tool_call>${json}</devdash_tool_call><|im_end|>`,
       `<tool_call>${json}<|im_end|>`,
       `${json}</tool_call><|im_end|>`,
       `${json}<|im_end|>`,

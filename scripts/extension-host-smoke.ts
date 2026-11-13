@@ -4,14 +4,14 @@ import { join } from "node:path";
 import * as vscode from "vscode";
 
 export async function run(): Promise<void> {
-  const extension = vscode.extensions.getExtension("xadupre.arranged-agents");
+  const extension = vscode.extensions.getExtension("xadupre.devdash-agents");
   assert.ok(extension, "The packaged extension must be installed.");
   await extension.activate();
   assert.ok(extension.isActive);
   const commands = await vscode.commands.getCommands(true);
-  assert.ok(commands.includes("arrangedAgents.ask"));
-  assert.ok(commands.includes("arrangedAgents.open"));
-  await vscode.commands.executeCommand("arrangedAgents.open");
+  assert.ok(commands.includes("devdashAgents.ask"));
+  assert.ok(commands.includes("devdashAgents.open"));
+  await vscode.commands.executeCommand("devdashAgents.open");
   const appTabOpened = vscode.window.tabGroups.all.some((group) =>
     group.tabs.some((tab) => tab.label === "Arranged Agents"),
   );

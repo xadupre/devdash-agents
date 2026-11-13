@@ -11,7 +11,7 @@ import {
 } from "../src/local-model";
 
 test("model inspection reads the configured context length and rejects invalid limits", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "arranged-agents-model-info-"));
+  const root = await mkdtemp(join(tmpdir(), "devdash-agents-model-info-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const config = '{"model":{"context_length":40960}}';
   await writeFile(join(root, "genai_config.json"), config);
@@ -22,7 +22,7 @@ test("model inspection reads the configured context length and rejects invalid l
   });
 
   test("model inspection estimates KV bytes and detects shared CUDA cache allocation", async (t) => {
-    const root = await mkdtemp(join(tmpdir(), "arranged-agents-model-kv-"));
+    const root = await mkdtemp(join(tmpdir(), "devdash-agents-model-kv-"));
     t.after(() => rm(root, { recursive: true, force: true }));
     await writeFile(
       join(root, "genai_config.json"),
@@ -57,25 +57,25 @@ test("model inspection reads the configured context length and rejects invalid l
 });
 
 test("model names come from the Foundry Local manifest or the directory", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "arranged-agents-model-name-"));
+  const root = await mkdtemp(join(tmpdir(), "devdash-agents-model-name-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const model = join(root, "0123abcd", "v2");
   await mkdir(model, { recursive: true });
   assert.equal(await localModelName(model), "v2");
   await writeFile(
-    join(root, "0123abcd", ".arranged-download.json"),
+    join(root, "0123abcd", ".devdash-download.json"),
     JSON.stringify({
       id: "azureml://registries/azureml/models/qwen3-0.6b-generic-cpu-dq44/versions/2",
       files: [],
     }),
   );
   assert.equal(await localModelName(model), "qwen3-0.6b-generic-cpu-dq44");
-  await writeFile(join(root, "0123abcd", ".arranged-download.json"), "{bad");
+  await writeFile(join(root, "0123abcd", ".devdash-download.json"), "{bad");
   assert.equal(await localModelName(model), "v2");
 });
 
 test("model size includes nested weights and tokenizer files and reports missing paths", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "arranged-agents-model-size-"));
+  const root = await mkdtemp(join(tmpdir(), "devdash-agents-model-size-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, "weights"));
   await writeFile(join(root, "genai_config.json"), "{}");
@@ -96,7 +96,7 @@ test("model size includes nested weights and tokenizer files and reports missing
 });
 
 test("validates and resolves a local ONNX GenAI model directory", async () => {
-  const root = await mkdtemp(join(tmpdir(), "arranged-agents-model-"));
+  const root = await mkdtemp(join(tmpdir(), "devdash-agents-model-"));
   const model = join(root, "model");
   await mkdir(model);
   await writeFile(
@@ -111,7 +111,7 @@ test("validates and resolves a local ONNX GenAI model directory", async () => {
 });
 
 test("rejects a missing directory, missing configuration, invalid JSON, and non-object configuration", async () => {
-  const root = await mkdtemp(join(tmpdir(), "arranged-agents-model-"));
+  const root = await mkdtemp(join(tmpdir(), "devdash-agents-model-"));
   const missingConfig = join(root, "missing-config");
   const invalidConfig = join(root, "invalid-config");
   const arrayConfig = join(root, "array-config");

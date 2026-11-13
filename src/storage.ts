@@ -304,7 +304,7 @@ export class ApplicationStorage {
     this.directory = join(
       homeDirectory,
       ".cache",
-      "arranged-agents",
+      "devdash-agents",
       "conversations",
     );
     this.filename = join(

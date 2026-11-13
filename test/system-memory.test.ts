@@ -30,7 +30,7 @@ test("CPU memory reports available bytes within the total", () => {
 });
 
 test("a missing nvidia-smi reports CPU memory only and is not spawned again", async () => {
-  const monitor = new MemoryMonitor("/__arranged_missing_nvidia_smi__");
+  const monitor = new MemoryMonitor("/__devdash_missing_nvidia_smi__");
   const [first, concurrent] = await Promise.all([
     monitor.sample(),
     monitor.sample(),

@@ -24,7 +24,7 @@ async function setup(
   t: TestContext,
   scenario = "success",
 ): Promise<CopilotOptions> {
-  const directory = await mkdtemp(join(tmpdir(), "arranged-agents-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "devdash-agents-test-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await writeFile(join(directory, "scenario"), scenario);
   return { cliPath: fixture, workingDirectory: directory, timeoutMs: 5_000 };

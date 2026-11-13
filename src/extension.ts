@@ -109,16 +109,16 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     }
     const configuration = (): vscode.WorkspaceConfiguration =>
-      vscode.workspace.getConfiguration("arrangedAgents");
+      vscode.workspace.getConfiguration("devdashAgents");
     const currentModel = (): string =>
       vscode.workspace
-        .getConfiguration("arrangedAgents")
+        .getConfiguration("devdashAgents")
         .get<string>("model", "")
         .trim();
     const requestTimeout = (): number =>
       requestTimeoutMs(
         vscode.workspace
-          .getConfiguration("arrangedAgents")
+          .getConfiguration("devdashAgents")
           .get("requestTimeoutMinutes"),
       );
     const storage = new ApplicationStorage(homedir(), root.fsPath);
@@ -173,12 +173,12 @@ export function activate(context: vscode.ExtensionContext): void {
               vscode.workspace.isTrusted && Boolean(panel) && !stopping,
             approvedOrigins: () =>
               vscode.workspace
-                .getConfiguration("arrangedAgents")
+                .getConfiguration("devdashAgents")
                 .get<string[]>("approvedUrlOrigins", []),
             rememberOrigin: (origin) => {
               const save = async (): Promise<void> => {
                 const settings =
-                  vscode.workspace.getConfiguration("arrangedAgents");
+                  vscode.workspace.getConfiguration("devdashAgents");
                 const origins = settings.get<string[]>(
                   "approvedUrlOrigins",
                   [],
@@ -267,7 +267,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const media = vscode.Uri.joinPath(context.extensionUri, "media");
     const scripts = vscode.Uri.joinPath(context.extensionUri, "dist", "src");
     panel = vscode.window.createWebviewPanel(
-      "arrangedAgents.application",
+      "devdashAgents.application",
       "Arranged Agents",
       vscode.ViewColumn.Active,
       {
@@ -293,7 +293,7 @@ export function activate(context: vscode.ExtensionContext): void {
       try {
         return parseRemoteMachines(
           vscode.workspace
-            .getConfiguration("arrangedAgents")
+            .getConfiguration("devdashAgents")
             .get<unknown>("remoteMachines", []),
         );
       } catch {
@@ -302,7 +302,7 @@ export function activate(context: vscode.ExtensionContext): void {
     };
     const configuredRemoteMachineName = (): string => {
       const name = vscode.workspace
-        .getConfiguration("arrangedAgents")
+        .getConfiguration("devdashAgents")
         .get<unknown>("remoteMachine", "");
       return typeof name === "string" ? name : "";
     };
@@ -323,7 +323,7 @@ export function activate(context: vscode.ExtensionContext): void {
       provider: LocalProvider;
       deviceId: number;
     } => {
-      const settings = vscode.workspace.getConfiguration("arrangedAgents");
+      const settings = vscode.workspace.getConfiguration("devdashAgents");
       const provider = settings.get<unknown>("localProvider", "auto");
       const deviceId = settings.get<unknown>("localDeviceId", -1);
       if (!isLocalProvider(provider)) return { provider: "auto", deviceId: -1 };
@@ -365,7 +365,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const publishSettings = (): void => {
       if (!panel || stopping) return;
       const { provider, deviceId } = configuredLocalDevice();
-      const settings = vscode.workspace.getConfiguration("arrangedAgents");
+      const settings = vscode.workspace.getConfiguration("devdashAgents");
       const update: SettingsState = {
         type: "settings-state",
         cliPath: settings.get<string>("cliPath", "copilot"),
@@ -383,7 +383,7 @@ export function activate(context: vscode.ExtensionContext): void {
         copilotModelsStatus,
         copilotModelsError,
         localModelPath: vscode.workspace
-          .getConfiguration("arrangedAgents")
+          .getConfiguration("devdashAgents")
           .get<string>("localModelPath", ""),
         remoteMachines: configuredRemoteMachines(),
         remoteMachine: configuredRemoteMachineName(),
@@ -413,7 +413,7 @@ export function activate(context: vscode.ExtensionContext): void {
         try {
           copilotModels = await listCopilotModels({
             cliPath: vscode.workspace
-              .getConfiguration("arrangedAgents")
+              .getConfiguration("devdashAgents")
               .get<string>("cliPath", "copilot"),
             workingDirectory: root.fsPath,
             timeoutMs: requestTimeout(),
@@ -429,7 +429,7 @@ export function activate(context: vscode.ExtensionContext): void {
       })());
     const prepareWorker = async (): Promise<string> => {
       const configuredWorker = vscode.workspace
-        .getConfiguration("arrangedAgents")
+        .getConfiguration("devdashAgents")
         .get<string>("localWorkerPath", DEFAULT_WORKER);
       let executable = resolveWorkerExecutable(
         configuredWorker,
@@ -573,7 +573,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const configuredPath = remote
         ? remote.modelPath
         : vscode.workspace
-            .getConfiguration("arrangedAgents")
+            .getConfiguration("devdashAgents")
             .get<string>("localModelPath", "");
       if (!configuredPath)
         throw new Error(
@@ -713,7 +713,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const save = async (): Promise<void> => {
         if (generation !== localModelSelectionGeneration) return;
         await vscode.workspace
-          .getConfiguration("arrangedAgents")
+          .getConfiguration("devdashAgents")
           .update(
             "localModelPath",
             modelPath,
@@ -866,11 +866,11 @@ export function activate(context: vscode.ExtensionContext): void {
             "approvedUrlOrigins",
             "remoteMachines",
             "remoteMachine",
-          ].some((key) => event.affectsConfiguration(`arrangedAgents.${key}`))
+          ].some((key) => event.affectsConfiguration(`devdashAgents.${key}`))
         ) {
           if (
-            event.affectsConfiguration("arrangedAgents.remoteMachines") ||
-            event.affectsConfiguration("arrangedAgents.remoteMachine")
+            event.affectsConfiguration("devdashAgents.remoteMachines") ||
+            event.affectsConfiguration("devdashAgents.remoteMachine")
           ) {
             // Detected devices belong to the previous execution machine.
             localDevices = undefined;
@@ -962,7 +962,7 @@ export function activate(context: vscode.ExtensionContext): void {
             case "harness-settings": {
               const save = async (): Promise<void> => {
                 const settings =
-                  vscode.workspace.getConfiguration("arrangedAgents");
+                  vscode.workspace.getConfiguration("devdashAgents");
                 const updates = { ...message.settings };
                 if (
                   updates.approvedUrlOrigins !== undefined &&
@@ -1006,7 +1006,7 @@ export function activate(context: vscode.ExtensionContext): void {
             }
             case "copilot-model": {
               const settings =
-                vscode.workspace.getConfiguration("arrangedAgents");
+                vscode.workspace.getConfiguration("devdashAgents");
               try {
                 await settings.update(
                   "model",
@@ -1039,7 +1039,7 @@ export function activate(context: vscode.ExtensionContext): void {
             }
             case "local-model": {
               const settings =
-                vscode.workspace.getConfiguration("arrangedAgents");
+                vscode.workspace.getConfiguration("devdashAgents");
               const configuredPath = settings.get<string>("localModelPath", "");
               const kind = await vscode.window.showQuickPick(
                 [
@@ -1093,7 +1093,7 @@ export function activate(context: vscode.ExtensionContext): void {
             }
             case "remote-machines": {
               const settings =
-                vscode.workspace.getConfiguration("arrangedAgents");
+                vscode.workspace.getConfiguration("devdashAgents");
               try {
                 for (const [key, value] of [
                   ["remoteMachines", message.machines],
@@ -1111,7 +1111,7 @@ export function activate(context: vscode.ExtensionContext): void {
             }
             case "local-device": {
               const settings =
-                vscode.workspace.getConfiguration("arrangedAgents");
+                vscode.workspace.getConfiguration("devdashAgents");
               try {
                 await settings.update(
                   "localProvider",
@@ -1156,7 +1156,7 @@ export function activate(context: vscode.ExtensionContext): void {
             case "settings":
               await vscode.commands.executeCommand(
                 "workbench.action.openSettings",
-                "@ext:xadupre.arranged-agents",
+                "@ext:xadupre.devdash-agents",
               );
               break;
             case "refresh":
@@ -1639,8 +1639,8 @@ export function activate(context: vscode.ExtensionContext): void {
   };
   context.subscriptions.push(
     output,
-    vscode.commands.registerCommand("arrangedAgents.open", open),
-    vscode.commands.registerCommand("arrangedAgents.ask", open),
+    vscode.commands.registerCommand("devdashAgents.open", open),
+    vscode.commands.registerCommand("devdashAgents.ask", open),
     { dispose: () => activePanel?.dispose() },
   );
   if (context.extensionMode === vscode.ExtensionMode.Development) {

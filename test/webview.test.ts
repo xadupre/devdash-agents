@@ -2729,7 +2729,7 @@ function settingsSender(dom: JSDOM) {
   const base: SettingsState = {
     type: "settings-state",
     cliPath: "copilot",
-    localWorkerPath: "arranged-genai-worker",
+    localWorkerPath: "devdash-genai-worker",
     requestTimeoutMinutes: 60,
     approvedUrlOrigins: [],
     copilotModel: "",
@@ -4021,7 +4021,7 @@ test("clicking rendered URLs asks the extension to open the browser without webv
     {
       role: "assistant",
       content:
-        "[**GitHub**](https://github.com/xadupre/arranged-agents)\n\nhttps://example.com",
+        "[**GitHub**](https://github.com/xadupre/devdash-agents)\n\nhttps://example.com",
     },
   ];
   publish(state);
@@ -4035,7 +4035,7 @@ test("clicking rendered URLs asks the extension to open the browser without webv
   assert.equal(click.defaultPrevented, true);
   assert.deepEqual(posted.at(-1), {
     type: "openExternal",
-    url: "https://github.com/xadupre/arranged-agents",
+    url: "https://github.com/xadupre/devdash-agents",
   });
   const middle = new dom.window.MouseEvent("auxclick", {
     bubbles: true,
@@ -4639,7 +4639,7 @@ test("the settings panel adds, selects and removes remote execution machines", a
   const machine = {
     name: "azure-vm",
     command: "az ssh vm --ip <ip-address> --subscription <subscription-id>",
-    workerPath: "/opt/arranged/arranged-genai-worker",
+    workerPath: "/opt/devdash/devdash-genai-worker",
     modelPath: "/home/azureuser/models/phi",
     repositoriesPath: "/home/azureuser/github",
   };

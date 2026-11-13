@@ -1,5 +1,5 @@
 {
-  "name": "arranged-agents",
+  "name": "devdash-agents",
   "displayName": "Arranged Agents",
   "description": "Calls the locally installed Copilot CLI and presents its answers as structured Markdown.",
   "version": "0.1.0",
@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "https://github.com/xadupre/arranged-agents.git"
+    "url": "https://github.com/xadupre/devdash-agents.git"
   },
   "engines": {
     "vscode": "^1.145.0",
@@ -33,41 +33,41 @@
   "contributes": {
     "commands": [
       {
-        "command": "arrangedAgents.open",
+        "command": "devdashAgents.open",
         "title": "Arranged Agents: Open"
       },
       {
-        "command": "arrangedAgents.ask",
+        "command": "devdashAgents.ask",
         "title": "Arranged Agents: Ask Copilot"
       }
     ],
     "configuration": {
       "title": "Arranged Agents v0.1.0",
       "properties": {
-        "arrangedAgents.cliPath": {
+        "devdashAgents.cliPath": {
           "type": "string",
           "default": "copilot",
           "scope": "machine",
           "description": "Path to your installed Copilot CLI executable. It is executed directly, not through a shell."
         },
-        "arrangedAgents.model": {
+        "devdashAgents.model": {
           "type": "string",
           "default": "",
           "description": "Copilot model ID, chosen in the Settings panel. Empty uses the CLI default."
         },
-        "arrangedAgents.localModelPath": {
+        "devdashAgents.localModelPath": {
           "type": "string",
           "default": "",
           "scope": "machine",
           "description": "Local GenAI model directory, Transformers checkpoint directory, or Hugging Face model ID (model or owner/model). Choose in Settings to prepare and save a GenAI export; checkpoint preparation requires Python model-builder dependencies."
         },
-        "arrangedAgents.localWorkerPath": {
+        "devdashAgents.localWorkerPath": {
           "type": "string",
-          "default": "arranged-genai-worker",
+          "default": "devdash-genai-worker",
           "scope": "machine",
-          "description": "Path to an external native worker, including NPU-enabled builds. By default, use the development worker, then the platform VSIX's bundled CPU or CUDA worker, then arranged-genai-worker on PATH. Executed directly without a shell."
+          "description": "Path to an external native worker, including NPU-enabled builds. By default, use the development worker, then the platform VSIX's bundled CPU or CUDA worker, then devdash-genai-worker on PATH. Executed directly without a shell."
         },
-        "arrangedAgents.remoteMachines": {
+        "devdashAgents.remoteMachines": {
           "type": "array",
           "default": [],
           "scope": "machine",
@@ -106,20 +106,20 @@
           },
           "description": "Remote machines that can run local models and their tools, edited in the Settings panel."
         },
-        "arrangedAgents.remoteMachine": {
+        "devdashAgents.remoteMachine": {
           "type": "string",
           "default": "",
           "scope": "machine",
           "description": "Name of the remote machine running local workers and tools, chosen in the Settings panel. Empty uses this computer."
         },
-        "arrangedAgents.localDeviceId": {
+        "devdashAgents.localDeviceId": {
           "type": "integer",
           "default": -1,
           "minimum": -1,
           "scope": "machine",
           "description": "Preferred local provider device ID. -1 selects automatically; the Settings panel lists discovered devices."
         },
-        "arrangedAgents.localProvider": {
+        "devdashAgents.localProvider": {
           "type": "string",
           "enum": [
             "auto",
@@ -137,7 +137,7 @@
           ],
           "description": "Preferred local execution provider, chosen in the Settings panel. Only explicitly opened local sessions use the native worker; Copilot sessions are unchanged."
         },
-        "arrangedAgents.approvedUrlOrigins": {
+        "devdashAgents.approvedUrlOrigins": {
           "type": "array",
           "items": {
             "type": "string"
@@ -146,7 +146,7 @@
           "scope": "machine",
           "description": "Remembered URL roots approved for reading (scheme, hostname and optional port, for example https://example.com). Applies across repositories. Remove an entry to require approval again. HTTPS GitHub file reads are automatically approved."
         },
-        "arrangedAgents.requestTimeoutMinutes": {
+        "devdashAgents.requestTimeoutMinutes": {
           "type": "integer",
           "default": 60,
           "minimum": 1,

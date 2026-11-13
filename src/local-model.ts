@@ -3,7 +3,7 @@ import { basename, dirname, resolve, join } from "node:path";
 import type { LocalProvider } from "./local-worker";
 
 /** Written by Foundry Local downloads at the root of each cached model. */
-export const FOUNDRY_MANIFEST = ".arranged-download.json";
+export const FOUNDRY_MANIFEST = ".devdash-download.json";
 
 export interface LocalModelInfo {
   name: string;

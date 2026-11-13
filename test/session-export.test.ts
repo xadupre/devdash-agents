@@ -12,7 +12,7 @@ import {
 import { testImage } from "./helpers";
 
 async function setup(t: TestContext) {
-  const cwd = await mkdtemp(join(tmpdir(), "arranged-agents-export-"));
+  const cwd = await mkdtemp(join(tmpdir(), "devdash-agents-export-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   const signal = AbortSignal.timeout(10_000);
   const git = (args: string[]) => runCommand("git", args, cwd, signal);

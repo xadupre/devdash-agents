@@ -14,7 +14,7 @@
 #include <thread>
 #include <vector>
 
-namespace arranged {
+namespace devdash {
 using Json = nlohmann::json;
 constexpr std::size_t maxLineBytes = 1024 * 1024;
 constexpr std::size_t maxChatMessages = 256;
@@ -117,4 +117,4 @@ class Worker {
   std::atomic_bool cancelled_{false};
   std::thread thread_;
 };
-}  // namespace arranged
+}  // namespace devdash

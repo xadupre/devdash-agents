@@ -1028,7 +1028,7 @@ test("GitHub errors, invalid links, bad pagination and pre-cancelled work fail e
 });
 
 test("commits read the real local branch and link to GitHub without requiring gh authentication", async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), "arranged-agents-git-"));
+  const cwd = await mkdtemp(join(tmpdir(), "devdash-agents-git-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   const signal = new AbortController().signal;
   const git = (args: string[]) => runCommand("git", args, cwd, signal);

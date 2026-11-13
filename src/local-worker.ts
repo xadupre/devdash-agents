@@ -67,7 +67,7 @@ interface Pending {
 
 const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_REDUCED_MESSAGES = 255;
-export const DEFAULT_WORKER = "arranged-genai-worker";
+export const DEFAULT_WORKER = "devdash-genai-worker";
 const WSL_DRIVER_DIRECTORY = "/usr/lib/wsl/lib";
 
 /**

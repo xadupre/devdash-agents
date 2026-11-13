@@ -52,7 +52,7 @@ for :doc:`supported platforms <../getting_started>`. Models are not bundled.
 In a Linux x64 source checkout, the first local session builds a missing engine
 automatically (about two minutes, with a progress notification).
 External workers, including NPU/vendor runtimes, can be selected with
-``arrangedAgents.localWorkerPath``. The engine runs on
+``devdashAgents.localWorkerPath``. The engine runs on
 the workspace extension host, including in SSH, WSL and dev containers.
 
 One model worker is shared by all local sessions that use the same model
@@ -135,7 +135,7 @@ GPT-OSS Harmony analysis and final channels are also separated, with assistant
 headers and completion tokens removed from displayed text. Routed Harmony calls
 require a complete tool handoff before validation.
 Calls accept a single ``<tool_call>`` element, the legacy
-``<arranged_tool_call>`` element, or an exact JSON object containing only
+``<devdash_tool_call>`` element, or an exact JSON object containing only
 ``name`` and ``arguments``. Qwen3.8 and Nemotron's
 ``<tool_call><function=NAME><parameter=NAME>VALUE</parameter></function></tool_call>``
 syntax is supported too; string parameters remain text and command argument
@@ -164,7 +164,7 @@ Local conversations remain archived separately and are never injected into the
 Copilot context. Local prompts are never routed to Copilot as a fallback.
 
 History and drafts for both views are stored as private, unencrypted JSON in
-``~/.cache/arranged-agents/conversations/`` on the extension host, outside the
+``~/.cache/devdash-agents/conversations/`` on the extension host, outside the
 repositories. Model weights and KV caches are not persisted. Reopening restores
 the views without loading a local model or starting Copilot. History is not
 synchronized, can be removed by cache

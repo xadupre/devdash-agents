@@ -2,8 +2,8 @@
 
 <img src="media/icon.png" alt="Arranged Agents icon" width="128" height="128">
 
-[![Tests](https://github.com/xadupre/arranged-agents/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/xadupre/arranged-agents/actions/workflows/tests.yml)
-[![Code coverage](https://codecov.io/gh/xadupre/arranged-agents/branch/main/graph/badge.svg)](https://codecov.io/gh/xadupre/arranged-agents)
+[![Tests](https://github.com/xadupre/devdash-agents/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/xadupre/devdash-agents/actions/workflows/tests.yml)
+[![Code coverage](https://codecov.io/gh/xadupre/devdash-agents/branch/main/graph/badge.svg)](https://codecov.io/gh/xadupre/devdash-agents)
 
 A two-panel application inside a VS Code editor tab, using your **locally
 installed GitHub Copilot CLI**:
@@ -53,7 +53,7 @@ Release VSIX assets include a ready-to-run native worker: **Linux x64** and
 with CPU. Choose the variant matching the extension host, not necessarily your
 desktop OS. CUDA requires a compatible NVIDIA driver, CUDA 13 and cuDNN 9;
 CPU packages need none of these. Models remain user-provided. NPU runtimes stay
-external, configured with `arrangedAgents.localWorkerPath`.
+external, configured with `devdashAgents.localWorkerPath`.
 See [installation and platform requirements](docs/getting_started.rst).
 
 ## Quick start
@@ -109,7 +109,7 @@ select a repository and click **Open Copilot session** to resume its saved Copil
 background, and interrupted requests are never sent again automatically.
 
 History is saved per repository parent as private, unencrypted JSON in
-`~/.cache/arranged-agents/conversations/` on the extension host, outside your
+`~/.cache/devdash-agents/conversations/` on the extension host, outside your
 repositories. Cache cleanup can remove these files; they are not a backup.
 Resume also requires the CLI's own saved session to remain available. If it is
 missing or invalid, an error is shown; **New session** explicitly starts fresh
@@ -202,11 +202,11 @@ native MathML without loading external fonts or scripts.
 
 Click **Settings** at the top right to show the settings panel, which chooses
 the Copilot model, the local model and the local device, and links to the Arranged Agents settings page in
-VS Code. `arrangedAgents.requestTimeoutMinutes` defaults to **60 minutes** and
+VS Code. `devdashAgents.requestTimeoutMinutes` defaults to **60 minutes** and
 limits total operation time, including tools and permission waits. Changes apply
 to subsequent operations, even in existing sessions.
 
-If VS Code cannot find `copilot`, set `arrangedAgents.cliPath` to its absolute
+If VS Code cannot find `copilot`, set `devdashAgents.cliPath` to its absolute
 executable path. The Copilot model is chosen in the **Settings** panel; it
 switches open sessions from their next message and applies to future sessions.
 In Remote SSH, WSL, or a dev container, the CLI must be installed and authenticated

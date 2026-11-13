@@ -5,7 +5,7 @@
 #include <regex>
 #include <set>
 
-namespace arranged {
+namespace devdash {
 namespace {
 std::string text(const Json& j, const char* key, std::size_t bound) {
   if (!j.contains(key) || !j[key].is_string())
@@ -429,4 +429,4 @@ void Worker::loop() {
   }
   if (stop) emit({{"id", *stop}, {"type", "stopped"}});
 }
-}  // namespace arranged
+}  // namespace devdash

@@ -69,9 +69,9 @@ Native C++ sources follow the repository ``.clang-format`` (Google style,
    pip install clang-format==22.1.8
    clang-format -i native/src/*.cpp native/src/*.h native/tests/*.cpp
 
-The extension uses ``build/native/arranged-genai-worker``
-(``Release/arranged-genai-worker.exe`` for a Windows multi-configuration build)
-automatically; ``arrangedAgents.localWorkerPath`` overrides it. Headers belong in each SDK's
+The extension uses ``build/native/devdash-genai-worker``
+(``Release/devdash-genai-worker.exe`` for a Windows multi-configuration build)
+automatically; ``devdashAgents.localWorkerPath`` overrides it. Headers belong in each SDK's
 ``include`` directory and libraries in ``lib``. The dynamic loader must also
 find the compatible runtime libraries and accelerator dependencies. On Windows,
 put their DLL directories on ``PATH``; on Linux, use the build RPATH or configure
@@ -90,8 +90,8 @@ on macOS). From the repository root, for example on Linux x64:
 
    npm ci
    npm run package:native -- --target linux-x64 --variant cpu
-   npm run package -- --target linux-x64 --out build/arranged-agents-linux-x64-cpu.vsix
-   npm run package:verify -- build/arranged-agents-linux-x64-cpu.vsix
+   npm run package -- --target linux-x64 --out build/devdash-agents-linux-x64-cpu.vsix
+   npm run package:verify -- build/devdash-agents-linux-x64-cpu.vsix
 
 Targets are ``linux-x64``, ``win32-x64`` and ``darwin-arm64``; variants are
 ``cpu`` and ``cuda`` (CUDA is unavailable on macOS). Cross-compilation is
@@ -116,7 +116,7 @@ verification. For a small, checksum-pinned fixture:
    python native/tests/fetch_model.py
    ARRANGED_TEST_MODEL_HAS_CHAT_TEMPLATE=1 \
    ARRANGED_TEST_MODEL_DIR="$PWD/build/native-deps/model-chat" \
-     npm run package:verify -- build/arranged-agents-linux-x64-cpu.vsix
+     npm run package:verify -- build/devdash-agents-linux-x64-cpu.vsix
 
 The verifier always uses CPU, including for CUDA packages, so missing GPUs
 cannot hide a broken installation. Test actual CUDA execution separately with
@@ -127,7 +127,7 @@ Without staging a runtime, plain ``npm run package`` still builds a
 Copilot-only, universal development VSIX. Native release builds must stage a
 runtime first and pass its matching ``--target``. Default worker resolution
 prefers a source development build, then the bundled runtime, then ``PATH``;
-an explicit ``arrangedAgents.localWorkerPath`` always takes precedence.
+an explicit ``devdashAgents.localWorkerPath`` always takes precedence.
 
 Policy and protocol tests can run without an SDK or model:
 

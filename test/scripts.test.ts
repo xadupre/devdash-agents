@@ -21,7 +21,7 @@ const installerScript = resolve("install.sh");
 const cleanupScript = resolve("clean.sh");
 
 async function temporaryDirectory(t: TestContext): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "arranged-scripts-"));
+  const directory = await mkdtemp(join(tmpdir(), "devdash-scripts-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
@@ -120,7 +120,7 @@ test(
       assert.ok(file);
       assert.equal(
         download[5],
-        `https://github.com/xadupre/arranged-agents/releases/latest/download/arranged-agents-${target}-${variant}.vsix`,
+        `https://github.com/xadupre/devdash-agents/releases/latest/download/devdash-agents-${target}-${variant}.vsix`,
       );
       assert.deepEqual(
         (await readFile(installer.installLog, "utf8")).trim().split("\n"),
@@ -136,7 +136,7 @@ test("installer selects CPU when nvidia-smi is absent", bashOnly, async (t) => {
   await installer.run();
   assert.match(
     await readFile(installer.downloadLog, "utf8"),
-    /arranged-agents-linux-x64-cpu\.vsix/,
+    /devdash-agents-linux-x64-cpu\.vsix/,
   );
 });
 
@@ -168,7 +168,7 @@ test(
     const installer = await installerFixture(t);
     await assert.rejects(
       installer.run({ NVIDIA_STATE: "gpu", DOWNLOAD_EXIT: "22" }),
-      /Failed to download arranged-agents-linux-x64-cuda\.vsix/,
+      /Failed to download devdash-agents-linux-x64-cuda\.vsix/,
     );
     const download = (await readFile(installer.downloadLog, "utf8"))
       .trim()

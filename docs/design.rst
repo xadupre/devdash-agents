@@ -4,8 +4,8 @@ Design
 Request flow
 ------------
 
-``src/extension.ts`` registers ``arrangedAgents.open`` and the legacy
-``arrangedAgents.ask`` alias. It opens a singleton editor webview and forwards
+``src/extension.ts`` registers ``devdashAgents.open`` and the legacy
+``devdashAgents.ask`` alias. It opens a singleton editor webview and forwards
 validated messages to the application model. Development launches open the
 tab automatically, without starting Copilot.
 
@@ -55,7 +55,7 @@ message cards and repository controls instead of rebuilding them for each token;
 changed messages keep expanded evidence, and session changes reset the DOM cache.
 
 ``src/storage.ts`` validates versioned snapshots and writes them atomically to
-private, per-parent JSON files in ``~/.cache/arranged-agents/conversations/``.
+private, per-parent JSON files in ``~/.cache/devdash-agents/conversations/``.
 The extension saves periodically and flushes on tab disposal/deactivation.
 Snapshots contain transcripts, per-view drafts, active repository/view and SDK
 session IDs, not browser-rendered HTML or local model/cache data. Only discovered

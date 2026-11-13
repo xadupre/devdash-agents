@@ -67,7 +67,7 @@ def run(*arguments):
 def build_lock():
     directory = ROOT / "build"
     directory.mkdir(exist_ok=True)
-    with (directory / ".arranged-worker-setup.lock").open("a+b") as lock:
+    with (directory / ".devdash-worker-setup.lock").open("a+b") as lock:
         if os.name == "nt":
             import msvcrt
             lock.write(b"\0")
@@ -162,7 +162,7 @@ def main():
             shutil.rmtree(runtime)
         run("cmake", "--install", build, "--config", "Release", "--prefix", runtime)
         if args.target.startswith("win32-"):
-            output = build / "Release" if (build / "Release" / "arranged-genai-worker.exe").exists() else build
+            output = build / "Release" if (build / "Release" / "devdash-genai-worker.exe").exists() else build
             for path in output.glob("onnxruntime*.dll"):
                 path.unlink()
             for path in (runtime / "bin").glob("onnxruntime*.dll"):
@@ -180,7 +180,7 @@ def main():
             (runtime / "lib" / f"libonnxruntime.so.{ORT_VERSION}").unlink()
         if args.target.startswith("darwin-"):
             for path in runtime.rglob("*"):
-                if path.is_file() and (path.suffix == ".dylib" or path.name == "arranged-genai-worker"):
+                if path.is_file() and (path.suffix == ".dylib" or path.name == "devdash-genai-worker"):
                     run("codesign", "--force", "--sign", "-", path)
         licenses = runtime / "licenses"
         licenses.mkdir()
