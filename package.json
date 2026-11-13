@@ -173,7 +173,7 @@
     "package:verify": "python native/verify-package.py"
   },
   "dependencies": {
-    "@github/copilot-sdk": "1.0.29",
+    "@github/copilot-sdk": "1.0.30",
     "@vscode/markdown-it-katex": "^1.1.2",
     "markdown-it": "^14.1.0"
   },
@@ -181,17 +181,17 @@
     "@eslint/js": "^10.0.0",
     "@types/markdown-it": "^14.1.0",
     "@types/jsdom": "^30.0.0",
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.6",
     "@types/vscode": "1.145.0",
     "@typescript/native": "npm:typescript@^7.0.2",
     "@vscode/vsce": "^4.1.0",
     "c8": "^12.0.0",
-    "eslint": "^10.13.0",
+    "eslint": "^10.14.0",
     "jsdom": "^31.0.0",
     "playwright": "^1.65.0",
     "prettier": "^3.0.0",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "typescript-eslint": "^8.72.1"
+    "typescript-eslint": "^8.72.2"
   },
   "overrides": {
     "@github/copilot-sdk": {
