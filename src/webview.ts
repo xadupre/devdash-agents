@@ -787,6 +787,10 @@ declare function acquireVsCodeApi(): {
   const saveWorker = element("save-worker", HTMLButtonElement);
   const deleteMachine = element("delete-machine", HTMLButtonElement);
   const deleteWorker = element("delete-worker", HTMLButtonElement);
+  const addMachineCopilotWorker = element(
+    "add-machine-copilot-worker",
+    HTMLButtonElement,
+  );
   const machineConfigurationStatus = element(
     "machine-configuration-status",
     HTMLElement,
@@ -819,6 +823,11 @@ declare function acquireVsCodeApi(): {
     deleteMachine.disabled =
       saving || !machineEntry.value || machineEntry.value === "local";
     deleteWorker.disabled = saving || !workerEntry.value;
+    addMachineCopilotWorker.disabled =
+      saving ||
+      !settingsState?.execution?.machines.some(
+        (machine) => machine.id === machineEntry.value,
+      );
   };
   const noteExecutionEdit = (): void => {
     executionEditVersion++;
@@ -1006,8 +1015,51 @@ declare function acquireVsCodeApi(): {
     requestWorkerFoundryModels();
     renderWorkerFoundry();
   });
+  addMachineCopilotWorker.addEventListener("click", () => {
+    if (executionConfigurationState === "saving") return;
+    const config = settingsState?.execution;
+    const machine = config?.machines.find(
+      (entry) => entry.id === machineEntry.value,
+    );
+    if (!config || !machine) return;
+    let id = `copilot-${machine.id}`.slice(0, 100);
+    for (
+      let index = 2;
+      config.workers.some((entry) => entry.id === id);
+      index++
+    )
+      id = `copilot-${machine.id}`.slice(0, 90) + `-${index}`;
+    saveExecutionConfiguration(
+      {
+        ...config,
+        workers: [
+          ...config.workers,
+          {
+            id,
+            name: `Copilot @ ${machine.name}`.slice(0, 100),
+            machineId: machine.id,
+            backend: "copilot",
+            model: { kind: "copilot", source: "" },
+            provider: "cpu",
+            deviceId: 0,
+          },
+        ],
+      },
+      "Worker settings",
+    );
+  });
+  const workerKindHint = element("worker-kind-hint", HTMLElement);
   const updateWorkerKind = (): void => {
     const copilot = workerKind.value === "copilot";
+    const machine = settingsState?.execution?.machines.find(
+      (entry) => entry.id === workerMachine.value,
+    );
+    const place = machine
+      ? `${machine.name}${machine.command ? " (remote)" : " (this computer)"}`
+      : "the selected machine";
+    workerKindHint.textContent = copilot
+      ? `The Copilot CLI (${machine?.cliPath ?? "copilot"}) runs on ${place}; it must be installed and signed in there. Its sessions edit files and run commands on ${place}.`
+      : `The model runs on ${place}. Each session using this worker chooses separately which machine edits files and runs commands.`;
     workerSource.required = !copilot;
     workerProvider.disabled = copilot;
     workerDevice.disabled = copilot;
@@ -1028,6 +1080,7 @@ declare function acquireVsCodeApi(): {
     renderWorkerFoundry();
   };
   workerKind.addEventListener("change", updateWorkerKind);
+  workerMachine.addEventListener("change", updateWorkerKind);
   workerEntry.addEventListener("change", () => {
     const worker = settingsState?.execution?.workers.find(
       (entry) => entry.id === workerEntry.value,

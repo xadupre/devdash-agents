@@ -32,7 +32,10 @@ next to the machine or worker settings.
 Each worker chooses one machine, exactly one model source, and **CPU** or
 **CUDA** with a device index. Model sources are:
 
-* **Copilot model ID**: uses the authenticated Copilot CLI on that machine.
+* **Copilot agent**: uses the authenticated Copilot CLI on that machine. To
+  use Copilot on a remote machine, install and sign in to the Copilot CLI
+  there, save the machine, then select **Add Copilot worker on this machine**.
+  Copilot sessions edit files and run commands on the worker's machine.
 * **ONNX/GenAI file or directory**: files must have their complete GenAI
   configuration, weights and tokenizer in the same model directory.
 * **Transformers checkpoint file or directory**: must have ``config.json``,

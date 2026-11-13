@@ -70,6 +70,7 @@ import {
   parseExecutionConfiguration,
   type ExecutionConfiguration,
   type MachineConfiguration,
+  type WorkerConfiguration,
   type SessionAssignment,
 } from "./execution";
 import { prepareRemoteModel, uploadRemoteModel } from "./remote-model-source";
@@ -207,7 +208,8 @@ export function activate(context: vscode.ExtensionContext): void {
           }
         : undefined;
     const chooseAssignment = async (
-      backend?: "copilot" | "local",
+      backend: "copilot" | "local" | undefined,
+      repositoryId: string,
     ): Promise<SessionAssignment | undefined> => {
       const config = executionConfiguration();
       const workers = config.workers.filter(
@@ -215,15 +217,46 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       if (!workers.length)
         throw new Error(
-          "Configure a worker in Settings before opening a session.",
+          `Add a ${backend === "local" ? "local model " : backend === "copilot" ? "Copilot " : ""}worker in Settings > Workers before opening a session.`,
         );
+      const repositoryPath = application
+        .getState()
+        .repositories.find((entry) => entry.id === repositoryId)?.path;
+      const where = (machine: MachineConfiguration): string =>
+        machine.command
+          ? `${machine.name} (remote)`
+          : `${machine.name} (this computer)`;
+      const machineOf = (id: string): string => {
+        const machine = config.machines.find((entry) => entry.id === id);
+        return machine ? where(machine) : id;
+      };
+      const kinds: Record<WorkerConfiguration["model"]["kind"], string> = {
+        copilot: "Copilot model",
+        file: "GenAI files",
+        checkpoint: "Transformers checkpoint",
+        "model-id": "Hugging Face",
+        foundry: "Foundry",
+      };
       const picked = await vscode.window.showQuickPick(
         workers.map((worker) => ({
           label: worker.name,
-          description: `${worker.backend} | ${worker.model.source || "CLI default"} | ${worker.machineId}${worker.backend === "local" ? ` | ${worker.provider.toUpperCase()} ${worker.deviceId}` : ""}`,
+          description:
+            worker.backend === "copilot"
+              ? `Copilot · ${worker.model.source || "CLI default model"}`
+              : `Local model · ${kinds[worker.model.kind]}: ${worker.model.source} · ${worker.provider === "cuda" ? `CUDA ${worker.deviceId}` : "CPU"}`,
+          detail:
+            worker.backend === "copilot"
+              ? `Copilot runs on ${machineOf(worker.machineId)} and edits files and runs commands there.`
+              : `The model runs on ${machineOf(worker.machineId)}. Next, choose where files are edited and commands run.`,
           worker,
         })),
-        { title: "Session worker (one model)" },
+        {
+          title: "New session - step 1: agent and model",
+          placeHolder:
+            "Choose who answers. Workers (one model each) are configured in Settings > Workers.",
+          matchOnDescription: true,
+          ignoreFocusOut: true,
+        },
       );
       if (!picked) return undefined;
       const machines = config.machines.filter(
@@ -231,14 +264,28 @@ export function activate(context: vscode.ExtensionContext): void {
           picked.worker.backend !== "copilot" ||
           machine.id === picked.worker.machineId,
       );
-      const machine = await vscode.window.showQuickPick(
-        machines.map((machine) => ({
-          label: `${machine.name} (${machine.id})`,
-          description: machine.repositoriesPath,
-          machine,
-        })),
-        { title: "Session execution machine (files and commands)" },
-      );
+      const machine =
+        machines.length === 1
+          ? { machine: machines[0]! }
+          : await vscode.window.showQuickPick(
+              machines.map((machine) => ({
+                label: where(machine),
+                description:
+                  machine.id === picked.worker.machineId
+                    ? "same machine as the model"
+                    : `model stays on ${machineOf(picked.worker.machineId)}`,
+                detail: repositoryPath
+                  ? `Repository: ${machineRepositoryPath(machine, repositoryPath)}`
+                  : `Repositories directory: ${machine.repositoriesPath}`,
+                machine,
+              })),
+              {
+                title: "New session - step 2: machine for files and commands",
+                placeHolder: `Where should ${picked.worker.name} read and edit the repository and run commands?`,
+                matchOnDescription: true,
+                ignoreFocusOut: true,
+              },
+            );
       if (!machine) return undefined;
       return assignSession(config, picked.worker.id, machine.machine.id);
     };
@@ -1678,7 +1725,10 @@ export function activate(context: vscode.ExtensionContext): void {
               if (!repository) throw new Error("Unknown repository.");
               const assignment =
                 application.getAssignment(message.id) ??
-                (await chooseAssignment(repository.backend ?? "copilot"));
+                (await chooseAssignment(
+                  repository.backend ?? "copilot",
+                  message.id,
+                ));
               if (!assignment) break;
               if (repository.backend === "local") {
                 const setup = createLocalSessionSetup(
@@ -1701,7 +1751,7 @@ export function activate(context: vscode.ExtensionContext): void {
             case "open-session": {
               const existing = application.getAssignment(message.id, "copilot");
               const assignment =
-                existing ?? (await chooseAssignment("copilot"));
+                existing ?? (await chooseAssignment("copilot", message.id));
               if (!assignment) break;
               await application.openSession(
                 message.id,
@@ -1713,7 +1763,7 @@ export function activate(context: vscode.ExtensionContext): void {
               application.selectSession(message.id, message.view);
               break;
             case "add-session": {
-              const assignment = await chooseAssignment();
+              const assignment = await chooseAssignment(undefined, message.id);
               if (!assignment) break;
               if (assignment.worker.backend === "copilot")
                 await application.addCopilotSession(message.id, assignment);
@@ -1767,7 +1817,8 @@ export function activate(context: vscode.ExtensionContext): void {
                 message.type === "open-local-session" && repository.localSession
                   ? application.getAssignment(message.id, "local")
                   : undefined;
-              const assignment = existing ?? (await chooseAssignment("local"));
+              const assignment =
+                existing ?? (await chooseAssignment("local", message.id));
               if (!assignment) break;
               const setup = createLocalSessionSetup(
                 message.id,
@@ -1798,7 +1849,7 @@ export function activate(context: vscode.ExtensionContext): void {
               const assignment =
                 current?.worker.backend === "copilot"
                   ? current
-                  : await chooseAssignment("copilot");
+                  : await chooseAssignment("copilot", message.id);
               if (!assignment) break;
               const sessions = await vscode.window.withProgress(
                 {
@@ -1858,7 +1909,10 @@ export function activate(context: vscode.ExtensionContext): void {
               if (!repository) throw new Error("Unknown repository.");
               const assignment =
                 application.getAssignment(message.id) ??
-                (await chooseAssignment(repository.backend ?? "copilot"));
+                (await chooseAssignment(
+                  repository.backend ?? "copilot",
+                  message.id,
+                ));
               if (!assignment) break;
               const operation =
                 repository.backend === "local"

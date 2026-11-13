@@ -345,7 +345,7 @@ export function renderApplication(resources: {
       <h2>Settings</h2>
       <section class="settings-group" aria-labelledby="machines-title">
         <h3 id="machines-title">Machines</h3>
-        <p class="repository-hint">One local machine and any number of remote entries. Different identifiers may connect to the same host. Paths belong to that machine; remote hosts require a POSIX shell and standard GNU utilities.</p>
+        <p class="repository-hint">One local machine and any number of remote entries. Different identifiers may connect to the same host. Paths belong to that machine; remote hosts require a POSIX shell and standard GNU utilities. To use Copilot on a remote machine, install and sign in to the Copilot CLI there, save the machine, then select <strong>Add Copilot worker on this machine</strong>.</p>
         <label for="machine-entry">Edit machine</label>
         <select id="machine-entry"><option value="">Add a remote machine</option></select>
         <form id="machine-configuration">
@@ -356,7 +356,7 @@ export function renderApplication(resources: {
           <label for="machine-models">Models storage directory (absolute path)</label><input id="machine-models" required maxlength="4096">
           <label for="machine-worker">Native worker executable</label><input id="machine-worker" required maxlength="4096" value="devdash-genai-worker">
           <label for="machine-copilot">Copilot CLI executable</label><input id="machine-copilot" required maxlength="4096" value="copilot">
-          <button id="save-machine" type="submit">Save machine</button><button id="delete-machine" type="button" disabled>Delete machine</button>
+          <button id="save-machine" type="submit">Save machine</button><button id="delete-machine" type="button" disabled>Delete machine</button><button id="add-machine-copilot-worker" type="button" disabled title="Create a worker that runs the Copilot CLI on this machine">Add Copilot worker on this machine</button>
           <p id="machine-configuration-status"></p>
         </form>
       </section>
@@ -367,10 +367,10 @@ export function renderApplication(resources: {
         <form id="worker-configuration">
           <label for="worker-id">Identifier (stable, unique)</label><input id="worker-id" required pattern="[A-Za-z0-9_\\-]{1,100}" maxlength="100">
           <label for="worker-name">Display name</label><input id="worker-name" required maxlength="100">
-          <label for="worker-machine">Worker machine</label><select id="worker-machine"></select>
-          <label for="worker-kind">Model source</label>
+          <label for="worker-machine">Runs on machine (Copilot CLI or model)</label><select id="worker-machine"></select>
+          <label for="worker-kind">Agent and model source</label>
           <select id="worker-kind">
-            <option value="copilot">Copilot model ID (empty = CLI default)</option>
+            <option value="copilot">Copilot agent (model ID; empty = CLI default)</option>
             <option value="file">ONNX/GenAI file or directory</option>
             <option value="checkpoint">Transformers checkpoint file or directory</option>
             <option value="model-id">Hugging Face model ID</option>
@@ -378,6 +378,7 @@ export function renderApplication(resources: {
           </select>
           <label for="worker-source">Path or model ID</label><input id="worker-source" maxlength="4096" list="worker-model-suggestions">
           <datalist id="worker-model-suggestions"></datalist>
+          <p id="worker-kind-hint" class="repository-hint"></p>
           <div id="worker-foundry" hidden>
             <label for="worker-foundry-model">Foundry catalogue model (for the selected device)</label>
             <div class="settings-row">

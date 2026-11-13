@@ -5,7 +5,11 @@ Every repository can have multiple Copilot and local sessions open at the same
 time. Each has its own transcript and draft; switching sessions never merges model
 context. Sessions start lazily and continue independently while another session
 is displayed. Selecting a repository only displays its current view and draft;
-use **Add**, choose a configured worker, then its execution machine to open an independent session.
+use **Add** to open an independent session in two steps: first the agent and
+its model (a configured worker; the list shows where it runs), then the machine
+where files are edited and commands run, with the repository path on that
+machine. The second step is skipped for Copilot workers and when only one
+machine is configured.
 The **Session** dropdown lists all open sessions in the selected repository.
 **Close** stops only the selected session, leaving its transcript available.
 **Resume** lists the repository's saved Copilot sessions,

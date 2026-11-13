@@ -5336,3 +5336,62 @@ test("Foundry workers pick a catalogue model for the selected device", async (t)
     source: cpuId,
   });
 });
+
+test("a saved remote machine gets a one-click Copilot worker and explained placement", async (t) => {
+  const { dom, document, posted } = await setup(t);
+  const local = {
+    id: "local",
+    name: "Local",
+    command: "",
+    repositoriesPath: "/projects",
+    modelsPath: "/models",
+    workerPath: "worker",
+    cliPath: "copilot",
+  };
+  const remote = {
+    ...local,
+    id: "gpu",
+    name: "GPU",
+    command: "ssh gpu",
+    cliPath: "/opt/copilot",
+  };
+  const copilot = {
+    id: "copilot-gpu",
+    name: "Existing",
+    machineId: "local",
+    backend: "copilot" as const,
+    model: { kind: "copilot" as const, source: "" },
+    provider: "cpu" as const,
+    deviceId: 0,
+  };
+  settingsSender(dom)({
+    execution: { machines: [local, remote], workers: [copilot] },
+  });
+  const add = document.querySelector<HTMLButtonElement>(
+    "#add-machine-copilot-worker",
+  )!;
+  const machineEntry =
+    document.querySelector<HTMLSelectElement>("#machine-entry")!;
+  machineEntry.value = "";
+  machineEntry.dispatchEvent(new dom.window.Event("change"));
+  assert.equal(add.disabled, true, "unsaved machines have no worker yet");
+  machineEntry.value = "gpu";
+  machineEntry.dispatchEvent(new dom.window.Event("change"));
+  add.click();
+  const saved = posted.at(-1)!;
+  if (saved.type !== "execution-configuration") assert.fail();
+  assert.deepEqual(saved.configuration.workers[1], {
+    ...copilot,
+    id: "copilot-gpu-2",
+    name: "Copilot @ GPU",
+    machineId: "gpu",
+  });
+  const workerMachine =
+    document.querySelector<HTMLSelectElement>("#worker-machine")!;
+  workerMachine.value = "gpu";
+  workerMachine.dispatchEvent(new dom.window.Event("change"));
+  assert.match(
+    document.querySelector("#worker-kind-hint")!.textContent!,
+    /Copilot CLI \(\/opt\/copilot\) runs on GPU \(remote\)/,
+  );
+});
