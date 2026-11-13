@@ -8,7 +8,7 @@ import type { Conversation } from "./conversation";
 import type { ImageAttachment } from "./images";
 import type { LocalModelInfo } from "./local-model";
 import { LocalResponse } from "./local-response";
-import { remoteError, runRemoteScript } from "./remote";
+import { REMOTE_ERROR_PREFIX, remoteError, runRemoteScript } from "./remote";
 import type {
   ContextReductionMode,
   LocalChatMessage,
@@ -167,25 +167,27 @@ export class LocalConversation implements Conversation {
             message: `Local model directory size: ${(this.modelInfo.sizeBytes / 1024 ** 2).toFixed(2)} MiB (${this.modelInfo.sizeBytes} logical bytes, including weights and tokenizer). Context: ${this.modelInfo.contextLength} tokens; generation limit: ${Math.min(this.modelInfo.contextLength, 8192)} tokens including prompt.`,
           },
         });
-      const device: LocalDevice = await this.worker.load(
-        this.modelPath,
-        this.provider,
-        this.deviceId,
-        operationSignal,
-      );
-      operationSignal.throwIfAborted();
-      this.device = device;
-      this.ready = true;
       if (this.tools) {
         let entries: string[];
         if (this.tools.remote) {
+          this.emit({
+            type: "session.info",
+            data: {
+              infoType: "local",
+              message: `Checking repository ${this.tools.repositoryPath} on harness machine ${this.tools.remote.name}...`,
+            },
+          });
           const result = await runRemoteScript(
             this.tools.remote,
-            `cd -- "$1" && for entry in ./* ./.[!.]* ./..?*; do
+            `cd -- "$1" || {
+  printf '${REMOTE_ERROR_PREFIX}Cannot open repository directory "%s" on %s. Check the harness machine repositories path and that the repository is cloned there.\\n' "$1" "$2" >&2
+  exit 2
+}
+for entry in ./* ./.[!.]* ./..?*; do
   [ -e "$entry" ] || [ -L "$entry" ] || continue
   printf '%s\\0' "\${entry#./}"
 done`,
-            [this.tools.repositoryPath],
+            [this.tools.repositoryPath, this.tools.remote.name],
             { signal: operationSignal },
           );
           if (!result.completed || result.code !== 0)
@@ -202,6 +204,15 @@ done`,
           ].join("\n"),
         });
       }
+      const device: LocalDevice = await this.worker.load(
+        this.modelPath,
+        this.provider,
+        this.deviceId,
+        operationSignal,
+      );
+      operationSignal.throwIfAborted();
+      this.device = device;
+      this.ready = true;
       this.emit({
         type: "session.info",
         data: {

@@ -572,6 +572,50 @@ test(
 );
 
 test(
+  "missing remote repositories fail before model loading despite SSH statistics",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const root = await directory(t);
+    const repository = join(root, "missing");
+    let loads = 0;
+    const conversation = new LocalConversation(
+      {
+        load: async () => {
+          loads++;
+          return { provider: "cpu", deviceId: 0, name: "CPU" };
+        },
+        stop: async () => {},
+        generateChat: async () => {},
+      },
+      "/model",
+      "cpu",
+      0,
+      {
+        repositoryPath: repository,
+        remote: {
+          name: "tools",
+          command: `sh -c '"$0" "$@"; printf "\\nBytes per second: sent 12343.4, received 9184.6\\n" >&2' ${connection}`,
+        },
+        requestPermission: async () => true,
+      },
+    );
+    t.after(() => conversation.dispose());
+    await assert.rejects(
+      conversation.start(AbortSignal.timeout(10_000)),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(
+          error.message,
+          `Cannot open repository directory "${repository}" on tools. Check the harness machine repositories path and that the repository is cloned there.`,
+        );
+        return true;
+      },
+    );
+    assert.equal(loads, 0);
+  },
+);
+
+test(
   "session exports inspect the assigned execution clone rather than the extension-host clone",
   { skip: process.platform === "win32" },
   async (t) => {
