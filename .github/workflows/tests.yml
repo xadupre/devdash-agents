@@ -48,6 +48,12 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      - name: Install remote-test utilities on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install coreutils grep
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix grep)/libexec/gnubin" >> "$GITHUB_PATH"
       - run: npm ci
       - run: npm run check
       - run: npm audit --audit-level=high
