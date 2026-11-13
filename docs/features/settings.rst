@@ -4,7 +4,7 @@ Settings
 Select **Settings** at the top right of the conversation, or the **Settings**
 tab of the right panel, to show the settings panel. A repository session does
 not need to be running. **All settings in VS Code...** opens the complete
-Arranged Agents settings page in VS Code. The panel is the only place in the
+DevDash Agents settings page in VS Code. The panel is the only place in the
 application where the Copilot model, the local model and the local device are
 changed.
 

@@ -27,7 +27,7 @@ resumes the same session in a new process and verifies the earlier context.
 It uses your Copilot allowance.
 Override the executable with ``ARRANGED_AGENTS_CLI_PATH`` if needed.
 
-Use **Test Arranged Agents activation** in the Run and Debug view for an F5
+Use **Test DevDash Agents activation** in the Run and Debug view for an F5
 activation/tab-opening check. A successful run writes host versions and the loaded extension
 path to ``dist/scripts/extension-host-smoke-result.json``. It tests the development
 extension, not VSIX installation.
@@ -236,7 +236,7 @@ Manual validation
 
 Install the packaged VSIX, then check:
 
-* Automatic development-tab opening and **Arranged Agents: Open** after VSIX installation.
+* Automatic development-tab opening and **DevDash Agents: Open** after VSIX installation.
 * Chat on the left; Repositories, Github, Sessions and Log views in the right panel.
 * Pointer/keyboard panel resizing and activity icons during startup and generation.
 * Direct-child discovery, lazy startup and context isolation while switching repositories.

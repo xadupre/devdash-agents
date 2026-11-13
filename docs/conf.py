@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-project = "Arranged Agents"
+project = "DevDash Agents"
 release = json.loads(
     (Path(__file__).resolve().parent.parent / "package.json").read_text(
         encoding="utf-8"

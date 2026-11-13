@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs the latest Arranged Agents release matching this machine into VS Code.
+# Installs the latest DevDash Agents release matching this machine into VS Code.
 set -euo pipefail
 
 REPO="xadupre/devdash-agents"

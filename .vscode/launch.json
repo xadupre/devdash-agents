@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run Arranged Agents",
+      "name": "Run DevDash Agents",
       "type": "extensionHost",
       "request": "launch",
       "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
@@ -10,7 +10,7 @@
       "preLaunchTask": "npm: compile"
     },
     {
-      "name": "Test Arranged Agents activation",
+      "name": "Test DevDash Agents activation",
       "type": "extensionHost",
       "request": "launch",
       "args": [

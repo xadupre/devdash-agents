@@ -71,7 +71,7 @@ const DEVICE_DISCOVERY_TIMEOUT_MS = 120_000;
 
 export function activate(context: vscode.ExtensionContext): void {
   deactivating = false;
-  const output = vscode.window.createOutputChannel("Arranged Agents");
+  const output = vscode.window.createOutputChannel("DevDash Agents");
   let savingConfiguration: Promise<void> = Promise.resolve();
   const report = (error: unknown): string => {
     const message = error instanceof Error ? error.message : String(error);
@@ -81,7 +81,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const openApplication = async (): Promise<void> => {
     if (!vscode.workspace.isTrusted) {
       await vscode.window.showWarningMessage(
-        "Trust the workspace before running Arranged Agents.",
+        "Trust the workspace before running DevDash Agents.",
       );
       return;
     }
@@ -105,7 +105,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     if (root.scheme !== "file") {
       throw new Error(
-        "Arranged Agents requires a local directory in the extension host.",
+        "DevDash Agents requires a local directory in the extension host.",
       );
     }
     const configuration = (): vscode.WorkspaceConfiguration =>
@@ -142,7 +142,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }, report);
     const saveFailure = (error: unknown): void => {
       void vscode.window.showErrorMessage(
-        `Arranged Agents could not save its history: ${report(error)}`,
+        `DevDash Agents could not save its history: ${report(error)}`,
       );
     };
     const scheduleSave = (): void => {
@@ -268,7 +268,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const scripts = vscode.Uri.joinPath(context.extensionUri, "dist", "src");
     panel = vscode.window.createWebviewPanel(
       "devdashAgents.application",
-      "Arranged Agents",
+      "DevDash Agents",
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
@@ -1634,7 +1634,7 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       await opening;
     } catch (error) {
-      await vscode.window.showErrorMessage(`Arranged Agents: ${report(error)}`);
+      await vscode.window.showErrorMessage(`DevDash Agents: ${report(error)}`);
     }
   };
   context.subscriptions.push(

@@ -1,7 +1,7 @@
 Workspace
 =========
 
-Arranged Agents opens as a single editor tab with two resizable panels:
+DevDash Agents opens as a single editor tab with two resizable panels:
 
 * the selected repository's Copilot conversation on the left;
 * a shared sidebar on the right with **Repositories**, **Github**, **Log** and **Settings** views.

@@ -42,7 +42,7 @@ The additional command exceptions do not cover shell expansions or redirections.
 Other HTTP or HTTPS reads require consent for the URL origin: scheme, hostname
 and port. **Allow <origin> and remember** saves approval across repositories and
 sessions. Redirects, subdomains, ports and schemes are separate origins.
-Approved origins can be reviewed or removed in the Arranged Agents settings.
+Approved origins can be reviewed or removed in the DevDash Agents settings.
 
 Every command in a pipeline or compound command must qualify individually.
 Other writes and repository-changing Git or GitHub actions remain manual.

@@ -10,7 +10,7 @@ The **Session** dropdown lists all open sessions in the selected repository.
 **Close** stops only the selected session, leaving its transcript available.
 **Resume** lists the repository's saved Copilot sessions,
 including ones started from the Copilot CLI, and resumes the chosen one; a
-session started outside Arranged Agents keeps its model context but its earlier
+session started outside DevDash Agents keeps its model context but its earlier
 messages are not shown. **New** closes and archives the selected conversation
 and replaces it with a fresh session of the same type; other sessions remain open.
 Model and device selection stays in the Settings tab, not in this toolbar.
@@ -191,7 +191,7 @@ sessions remain in the table. Deleting a conversation also deletes its annotatio
 The table shows recorded models and issue or PR references found in user
 messages and parallel-session context. Models from older recordings or from an
 SDK session resumed without its earlier transcript may be unknown. The table
-only covers conversations recorded by Arranged Agents, not every session in the
+only covers conversations recorded by DevDash Agents, not every session in the
 Copilot CLI. Click **Export JSON** in a row to export that session, including an
 archived or unannotated one.
 
@@ -199,7 +199,7 @@ Export a session
 ----------------
 
 Select a repository and click **Export session JSON** beside **Message to
-Copilot**. This saves the selected conversation as recorded by Arranged Agents,
+Copilot**. This saves the selected conversation as recorded by DevDash Agents,
 without starting a model request. The snapshot includes all transcript entries
 regardless of the display filters, recorded attachments, the unsent text draft
 any recorded models, annotation and saved PostMortem. For parallel sessions it
@@ -244,7 +244,7 @@ descriptions, local paths and code. Review it before sharing.
 Crash recovery
 --------------
 
-If the Copilot process disconnects during startup or a request, Arranged Agents
+If the Copilot process disconnects during startup or a request, DevDash Agents
 attempts bounded automatic recovery within the operation timeout. It resumes the
 saved SDK session, retains partial output and asks the agent to inspect recorded
 results and repository state before continuing.
@@ -265,7 +265,7 @@ Right-click a repository, or focus it and press **Shift+F10**, to access:
 * **Delete latest session**, which removes the newest conversation and restores
   the previous archive without starting Copilot;
 * **Delete all sessions for this repository**, which removes its current and
-  archived Arranged Agents conversations.
+  archived DevDash Agents conversations.
 
 .. figure:: ../images/sessions.png
    :alt: Repository context menu offering Close session, New session and deletion of the latest or all sessions.

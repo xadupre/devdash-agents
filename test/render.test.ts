@@ -50,7 +50,7 @@ test("the settings section shows the package version instead of the application 
     styleUri: "https://webview.invalid/app.css",
   });
   assert.doesNotMatch(html, /app-version/);
-  assert.equal(contributes.configuration.title, `Arranged Agents v${version}`);
+  assert.equal(contributes.configuration.title, `DevDash Agents v${version}`);
 });
 
 test("cached conversation HTML follows edited content and roles while retaining fresh metadata and avoiding stale session entries", () => {

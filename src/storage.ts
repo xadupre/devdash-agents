@@ -146,7 +146,7 @@ function parseConversation(value: unknown): SavedConversation {
     !Array.isArray(value.messages) ||
     !value.messages.every(isMessage)
   ) {
-    throw new Error("Invalid conversation in saved Arranged Agents history.");
+    throw new Error("Invalid conversation in saved DevDash Agents history.");
   }
   const postMortem =
     value.postMortem === undefined
@@ -203,7 +203,7 @@ function parseConversation(value: unknown): SavedConversation {
 function parseSavedSlots(value: unknown): SavedSessionSlot[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value))
-    throw new Error("Invalid sessions in saved Arranged Agents history.");
+    throw new Error("Invalid sessions in saved DevDash Agents history.");
   const ids = new Set<string>();
   return value.map((slot: unknown) => {
     if (
@@ -213,7 +213,7 @@ function parseSavedSlots(value: unknown): SavedSessionSlot[] | undefined {
       ids.has(slot.id) ||
       (slot.history !== undefined && !Array.isArray(slot.history))
     )
-      throw new Error("Invalid session in saved Arranged Agents history.");
+      throw new Error("Invalid session in saved DevDash Agents history.");
     ids.add(slot.id);
     return {
       id: slot.id,
@@ -233,7 +233,7 @@ function parseSavedApplication(value: unknown, root: string): SavedApplication {
     (value.activeId !== undefined && typeof value.activeId !== "string") ||
     !Array.isArray(value.sessions)
   ) {
-    throw new Error("Invalid saved Arranged Agents history.");
+    throw new Error("Invalid saved DevDash Agents history.");
   }
   const ids = new Set<string>();
   const sessions = value.sessions.map(
@@ -247,7 +247,7 @@ function parseSavedApplication(value: unknown, root: string): SavedApplication {
           session.view !== "local") ||
         (session.history !== undefined && !Array.isArray(session.history))
       ) {
-        throw new Error("Invalid repository in saved Arranged Agents history.");
+        throw new Error("Invalid repository in saved DevDash Agents history.");
       }
       ids.add(session.id);
       const localSessions = parseSavedSlots(session.localSessions);
@@ -260,7 +260,7 @@ function parseSavedApplication(value: unknown, root: string): SavedApplication {
           ))
       ) {
         throw new Error(
-          "Invalid selected local session in saved Arranged Agents history.",
+          "Invalid selected local session in saved DevDash Agents history.",
         );
       }
       if (
@@ -271,7 +271,7 @@ function parseSavedApplication(value: unknown, root: string): SavedApplication {
           ))
       )
         throw new Error(
-          "Invalid selected Copilot session in saved Arranged Agents history.",
+          "Invalid selected Copilot session in saved DevDash Agents history.",
         );
       return {
         id: session.id,
