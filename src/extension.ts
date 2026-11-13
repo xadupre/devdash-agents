@@ -41,6 +41,7 @@ import {
 import type { SettingsLoadStatus, SettingsState } from "./settings";
 import {
   downloadFoundryModel,
+  type DownloadProgress,
   listFoundryModels as listFoundryCatalogue,
   localFoundryModels,
   type FoundryCatalog,
@@ -81,7 +82,10 @@ import {
   type MachineConfiguration,
   type SessionAssignment,
 } from "./execution";
-import { prepareRemoteModel, uploadRemoteModel } from "./remote-model-source";
+import {
+  downloadRemoteFoundryModel,
+  prepareRemoteModel,
+} from "./remote-model-source";
 
 let activePanel: vscode.WebviewPanel | undefined;
 let closeActiveApplication: (() => Promise<void>) | undefined;
@@ -990,42 +994,43 @@ export function activate(context: vscode.ExtensionContext): void {
       const prepare = async (): Promise<string> => {
         const source = worker.name;
         if (worker.model.kind === "foundry") {
-          let reported = -1;
-          const downloaded = await logStep(
-            source,
-            `Getting Foundry model ${worker.model.source} on this computer`,
-            () =>
-              downloadFoundryModel(
-                worker.model.source,
-                workerMachine.command
-                  ? context.globalStorageUri.fsPath
-                  : workerMachine.modelsPath,
-                { signal: lifetime.signal },
-                ({ received, total }) => {
-                  if (!(total > 0)) return;
-                  const percent = Math.floor((received / total) * 10) * 10;
-                  if (percent <= reported) return;
-                  reported = percent;
-                  logEvent(
-                    source,
-                    `Downloaded ${percent}% of ${(total / 1024 ** 3).toFixed(1)} GB.`,
-                  );
-                },
-              ),
-          );
+          let reportedPercent = -5;
+          let reportedAt = Date.now();
+          const onProgress = ({ received, total }: DownloadProgress): void => {
+            if (!(total > 0)) return;
+            const percent = Math.floor((received / total) * 20) * 5;
+            if (percent <= reportedPercent && Date.now() - reportedAt < 60_000)
+              return;
+            reportedPercent = Math.max(percent, reportedPercent);
+            reportedAt = Date.now();
+            logEvent(
+              source,
+              `Downloaded ${(received / 1024 ** 3).toFixed(2)} of ${(total / 1024 ** 3).toFixed(2)} GB (${percent}%).`,
+            );
+          };
           return workerMachine.command
             ? logStep(
                 source,
-                `Copying the model to ${workerMachine.name}`,
+                `Downloading Foundry model ${worker.model.source} on ${workerMachine.name}`,
                 () =>
-                  uploadRemoteModel(
+                  downloadRemoteFoundryModel(
                     workerMachine,
-                    downloaded,
                     worker.model.source,
                     lifetime.signal,
+                    onProgress,
                   ),
               )
-            : downloaded;
+            : logStep(
+                source,
+                `Downloading Foundry model ${worker.model.source} on this computer`,
+                () =>
+                  downloadFoundryModel(
+                    worker.model.source,
+                    workerMachine.modelsPath,
+                    { signal: lifetime.signal },
+                    onProgress,
+                  ),
+              );
         }
         const model =
           worker.model.kind === "model-id"

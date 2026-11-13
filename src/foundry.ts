@@ -489,6 +489,38 @@ function cacheDirectory(id: string, cacheRoot: string): string {
 }
 
 /**
+ * Lists the files of the package's GenAI model directory with signed download
+ * URLs, so another machine can fetch them. The URLs are credentials.
+ */
+export async function foundryModelFiles(
+  id: string,
+  options: FoundryOptions = {},
+): Promise<{ path: string; size: number; url: string }[]> {
+  if (!isFoundryModelId(id)) throw new Error("Invalid Foundry Local model ID.");
+  const registry = new URL(registryUrl);
+  registry.searchParams.set("assetId", id);
+  const response = await request(registry, { headers }, options);
+  const data: unknown = await response.json();
+  if (!object(data))
+    throw new Error("Invalid Foundry Local registry response.");
+  const container = blobUrl(data.blobSasUri);
+  const files = await listFiles(container, options);
+  const [model = "."] = genaiDirectories(files);
+  const prefix = model === "." ? "" : `${model}/`;
+  return files
+    .filter((file) => file.path.startsWith(prefix))
+    .map((file) => {
+      const url = new URL(container);
+      url.pathname = `${url.pathname.replace(/\/$/, "")}/${file.path.split("/").map(encodeURIComponent).join("/")}`;
+      return {
+        path: file.path.slice(prefix.length),
+        size: file.size,
+        url: url.href,
+      };
+    });
+}
+
+/**
  * Downloads the complete package into an atomic cache and returns the
  * directory containing genai_config.json.
  */

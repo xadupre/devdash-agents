@@ -165,6 +165,8 @@ export function runRemoteScript(
   args: readonly string[],
   options: {
     input?: Buffer;
+    /** Receives standard output as it arrives, e.g. progress lines. */
+    onStdout?: (chunk: Buffer) => void;
     signal?: AbortSignal;
     timeoutMs?: number;
     maxOutput?: number;
@@ -244,6 +246,7 @@ export function runRemoteScript(
         return;
       }
       stdout.push(chunk);
+      options.onStdout?.(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
       stderr = (stderr + chunk.toString("utf8")).slice(-8192);

@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -14,6 +22,7 @@ import {
   parseBlobListing,
   type FoundryModel,
 } from "../src/foundry";
+import { downloadRemoteFoundryModel } from "../src/remote-model-source";
 
 const asset = "azureml://registries/azureml/models/phi-fixture/versions/1";
 const GiB = 1024 ** 3;
@@ -151,7 +160,7 @@ async function foundryServer(t: TestContext) {
     local.search = remote.search;
     return fetch(local, init);
   };
-  return { root, files, requests, state, fetch: localFetch };
+  return { root, files, requests, state, fetch: localFetch, port };
 }
 
 test("Foundry Local lists only text-generation variants the worker can run", async (t) => {
@@ -332,3 +341,69 @@ test("blob listings decode entities and reject DTDs and malformed sizes", () => 
   ])
     assert.throws(() => parseBlobListing(xml));
 });
+
+test(
+  "remote Foundry downloads run on the worker machine and report progress",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const hub = await foundryServer(t);
+    const bin = join(hub.root, "bin");
+    await mkdir(bin);
+    // Stands in for curl on the remote machine, fetching from the fixture server.
+    await writeFile(
+      join(bin, "curl"),
+      `#!${process.execPath}
+const args = process.argv.slice(2);
+const url = new URL(args.at(-1));
+fetch("http://127.0.0.1:${hub.port}" + url.pathname + url.search).then(async (response) => {
+  if (!response.ok) process.exit(22);
+  require("node:fs").writeFileSync(args[args.indexOf("-o") + 1], Buffer.from(await response.arrayBuffer()));
+});
+`,
+    );
+    await chmod(join(bin, "curl"), 0o755);
+    const machine = {
+      id: "gpu",
+      name: "GPU host",
+      command: `env "PATH=${bin}:${process.env.PATH}" "${process.execPath}" "${join(__dirname, "fixtures", "remote-shell.js")}"`,
+      repositoriesPath: "/projects",
+      modelsPath: join(hub.root, "remote models"),
+      workerPath: "devdash-genai-worker",
+      cliPath: "copilot",
+    };
+    const progress: { received: number; total: number }[] = [];
+    const signal = AbortSignal.timeout(15_000);
+    const directory = await downloadRemoteFoundryModel(
+      machine,
+      asset,
+      signal,
+      (value) => progress.push(value),
+      hub.fetch,
+    );
+    assert.equal(directory.startsWith(machine.modelsPath), true);
+    for (const [file, bytes] of hub.files)
+      assert.deepEqual(
+        await readFile(join(directory, file.slice("v1/".length))),
+        bytes,
+      );
+    assert.deepEqual(progress.at(-1), {
+      received: progress.at(-1)?.total,
+      total: [...hub.files.values()].reduce((sum, b) => sum + b.length, 0),
+    });
+    assert.deepEqual(await readdir(machine.modelsPath), [
+      directory.slice(machine.modelsPath.length + 1),
+    ]);
+    const count = hub.requests.length;
+    assert.equal(
+      await downloadRemoteFoundryModel(
+        machine,
+        asset,
+        signal,
+        undefined,
+        hub.fetch,
+      ),
+      directory,
+    );
+    assert.equal(hub.requests.length, count);
+  },
+);

@@ -56,8 +56,9 @@ Relative file/checkpoint paths are resolved under the worker machine's models
 directory. GenAI models load directly; checkpoint and Hub exports use the
 model builder installed on the worker machine, targeting its selected provider.
 Exports and downloads are kept in that machine's models storage. For remote
-Foundry workers the package is staged on the extension host, then streamed to
-remote storage using ``tar`` without buffering the model in memory. An isolated
+Foundry workers the extension resolves the file list, then the remote machine
+downloads the files itself with ``curl`` (required there); signed URLs are sent
+on standard input, and progress appears in the **Log** tab. An isolated
 ONNX weights file without configuration, and GGUF models, are not supported.
 
 **Add** in the session toolbar selects a worker, the worker machine running its
