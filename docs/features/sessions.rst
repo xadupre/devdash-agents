@@ -72,9 +72,12 @@ the workspace extension host, including in SSH, WSL and dev containers.
 
 One model worker is shared by all sessions assigned to that worker,
 including sessions in different repositories. Distinct worker identifiers run
-independently, even for the same model and device. Each conversation has
-an isolated KV cache. The worker serializes inference requests so sessions do
-not overlap calls into ONNX Runtime GenAI.
+independently, even for the same model and device. Conversation histories remain
+isolated. The worker serializes inference requests so sessions do not overlap
+calls into ONNX Runtime GenAI. Models configured for dynamic batching, including
+Qwen models with CPU embeddings, use GenAI Engine; other models use Generator.
+Engine releases each request after generation and manages a shared prefix cache
+instead of reserving a private KV cache for each idle conversation.
 
 The **Sessions** panel lists loaded models and their open local sessions,
 including cached tokens and an approximate KV byte size, context usage and
@@ -107,7 +110,7 @@ request.
 Use **Add**, then a native worker, to open another independent local conversation for the
 same repository. Each new session saves its chosen worker and execution machine;
 changing Settings does not move existing sessions. Sessions
-assigned to the same worker share it with separate context caches. Choose a conversation in
+assigned to the same worker share it with separate conversation histories. Choose a conversation in
 the **Session** selector or the Sessions panel. Drafts, transcripts,
 cancellation and context reduction belong to the selected conversation; saved
 transcripts are retained across application restarts.
@@ -135,6 +138,8 @@ unchanged; subsequent messages use only the reduced context. These controls are
 unavailable during inference or while the model is unloaded. They do not modify
 Copilot's remotely managed context. With fixed-capacity shared KV buffers, fewer
 cached tokens do not necessarily reduce allocated GPU memory.
+For Engine models, reduction updates the history without retaining a private
+request or generating a hidden token; the next turn prefills the reduced history.
 Use **Cancel context reduction** in the Sessions panel to interrupt either
 action. Summaries can lose details; the original transcript remains available
 for reference.
@@ -179,11 +184,12 @@ to 2000 characters of the model response in the log and final error message.
 Generation uses up to 8192
 tokens including the prompt, capped by the model's configured context length,
 so file results are not restricted to the worker's 2048-token default.
-Each local session keeps its own KV cache while the shared model is loaded. A
-new turn only processes the tokens after the prefix it shares with the cached
-conversation, so follow-up turns do not recompute the history. Closing a local
-session releases only its cache. A new session or failed generation resets that
-cache; offloading or moving the shared model discards every local cache.
+Generator models keep a KV cache per local session while the shared model is
+loaded. A new turn processes only tokens after its reusable cached prefix.
+Closing a session releases its private cache; a new session or failed generation
+resets it. Engine models reuse prefixes where their runtime supports it and
+report actual cached prompt tokens, but show zero private session-cache tokens
+between requests. Offloading or moving the shared model discards every cache.
 Local sessions do not support images or resumable runtime
 context. PostMortem, which uses Copilot, is unavailable while a local session is
 selected. Closing the last local session using a model unloads its worker; open

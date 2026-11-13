@@ -20,22 +20,32 @@ FILES = {
     "tokenizer_config.json": "514a6662da201b324a0c2abebb973a7f9515612a8328353d99c09d7ebcd2da2f",
     "vocab.json": "3ba3c3109ff33976c4bd966589c11ee14fcaa1f4c9e5e154c2ed7f99d80709e7",
 }
+ENGINE_FILES = {
+    "genai_config.json": "171028655fe5df3811abff3c8b15dd11c5b4b4f2eb8b85fa825da1df405f4cd3",
+    "decoder.onnx": "f867d6b4e5adb0cfe549e0bad346b8eb12ff397f123797771a7092bfcbb3936f",
+    "tokenizer.json": "2b407086f7c94e58e17fc2cdf676aeb89aa6331f11d19b3617f817d2ede31fb0",
+    "tokenizer_config.json": "7b8f96263d46084779ee664e5e170ccde4c914effd6d860e9d6aaa238a5a0019",
+}
 
 
-def main():
-    directory = Path(__file__).resolve().parents[2] / "build" / "native-deps" / "model"
+def fetch_files(directory, base, files):
     directory.mkdir(parents=True, exist_ok=True)
-    base = (
-        "https://raw.githubusercontent.com/microsoft/onnxruntime-genai/"
-        "e0e02a9d388bcc6929929241e1ec9e9c0c28c8f2/test/test_models/"
-        "hf-internal-testing/tiny-random-gpt2-fp32"
-    )
-    for name, checksum in FILES.items():
+    for name, checksum in files.items():
         path = directory / name
         if not path.exists():
             urllib.request.urlretrieve(f"{base}/{name}", path)
         if hashlib.sha256(path.read_bytes()).hexdigest() != checksum:
             raise ValueError(f"SHA-256 mismatch for test model file: {path}")
+
+
+def main():
+    directory = Path(__file__).resolve().parents[2] / "build" / "native-deps" / "model"
+    base = (
+        "https://raw.githubusercontent.com/microsoft/onnxruntime-genai/"
+        "e0e02a9d388bcc6929929241e1ec9e9c0c28c8f2/test/test_models/"
+        "hf-internal-testing/tiny-random-gpt2-fp32"
+    )
+    fetch_files(directory, base, FILES)
     chat_directory = directory.with_name("model-chat")
     chat_directory.mkdir(parents=True, exist_ok=True)
     for name in FILES:
@@ -71,7 +81,25 @@ def main():
     config["bos_token"] = config["eos_token"] = config["unk_token"] = "¥"
     config["chat_template"] = CHAT_TEMPLATE
     tokenizer_config.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    engine = directory.with_name("model-engine")
+    fetch_files(
+        engine,
+        "https://raw.githubusercontent.com/microsoft/onnxruntime-genai/"
+        "d01b2441a72d4e3223415b9b08474c6e65fbc028/test/models/engine/synthetic-paged",
+        ENGINE_FILES,
+    )
+    engine_chat = engine.with_name("model-engine-chat")
+    shutil.copytree(engine, engine_chat, dirs_exist_ok=True)
+    tokenizer_config = engine_chat / "tokenizer_config.json"
+    config = json.loads(tokenizer_config.read_text(encoding="utf-8"))
+    config["chat_template"] = CHAT_TEMPLATE
+    tokenizer_config.write_text(json.dumps(config) + "\n", encoding="utf-8")
+    engine_config = engine_chat / "genai_config.json"
+    config = json.loads(engine_config.read_text(encoding="utf-8"))
+    config["model"]["context_length"] = config["search"]["max_length"] = 512
+    engine_config.write_text(json.dumps(config) + "\n", encoding="utf-8")
     print(f"Verified tiny real-model fixture in {directory} and 1,000-token chat fixture in {chat_directory}")
+    print(f"Verified dynamic-batching Engine fixture in {engine_chat}")
 
 
 if __name__ == "__main__":

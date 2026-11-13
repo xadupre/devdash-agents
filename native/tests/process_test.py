@@ -5,10 +5,77 @@ import queue
 import subprocess
 import sys
 import threading
+from pathlib import Path
+
+
+def engine_checks(send, receive, directory):
+    send({"id": "engine-load", "method": "load", "provider": "cpu",
+          "modelPath": str(directory)})
+    receive("engine-load", "loaded", timeout=60)
+
+    def generate(identifier, **kwargs):
+        send({"id": identifier, "method": "generate", "maxLength": 64, **kwargs})
+        chunks = []
+        while True:
+            event = receive(identifier, "token", "done", timeout=30)
+            if event["type"] == "done":
+                assert event["generatedTokens"] > 0, event
+                assert event["cacheTokens"] == 0, "Closed Engine requests retain no private session cache"
+                assert chunks, event
+                return event
+            chunks.append(event["text"])
+
+    # More conversations than the model's eight resident rows must not exhaust
+    # capacity; each completed request releases its Engine resources.
+    for index in range(10):
+        generate(f"engine-{index}", prompt="ABC", session=f"engine-{index}")
+    generate("engine-chat", messages=[{"role": "user", "content": "AB"}])
+    send({"id": "engine-cancel", "method": "generate", "prompt": "ABC", "maxLength": 512})
+    terminal = None
+    cancellation_sent = acknowledged = False
+    tokens = 0
+    while terminal is None or (cancellation_sent and not acknowledged):
+        event = receive("engine-cancel", "token", "done", "cancelled", timeout=30)
+        if event["type"] == "token":
+            tokens += 1
+            if not cancellation_sent:
+                send({"id": "engine-cancel", "method": "cancel", "targetId": "engine-cancel"})
+                cancellation_sent = True
+        elif event["type"] == "cancelled":
+            acknowledged = True
+        else:
+            terminal = event
+    assert tokens > 0 and terminal["generatedTokens"] >= tokens, (tokens, terminal)
+    generate("engine-after-cancel", prompt="ABC")
+    send({"id": "engine-release", "method": "release", "session": "engine-0"})
+    receive("engine-release", "released")
+    history = [
+        {"role": "system", "content": "A"},
+        {"role": "user", "content": "AB" * 20},
+        {"role": "assistant", "content": "BC" * 10},
+        {"role": "user", "content": "C" * 10},
+        {"role": "assistant", "content": "A" * 10},
+    ]
+    for mode in ("sliding", "compress"):
+        identifier = f"engine-reduce-{mode}"
+        send({"id": identifier, "method": "reduceContext", "mode": mode,
+              "session": "engine-chat", "messages": history, "maxLength": 512})
+        reduced = receive(identifier, "reduced", timeout=30)
+        assert reduced["cacheTokens"] == 0, reduced
+        assert reduced["messages"][0] == history[0], reduced
+        generate(f"engine-follow-up-{mode}", maxLength=512,
+                 messages=reduced["messages"] + [{"role": "user", "content": "B"}])
 
 
 def main():
     executable, mode = sys.argv[1:]
+    engine_directory = Path(os.environ.get(
+        "ARRANGED_TEST_ENGINE_MODEL_DIR",
+        str(Path(__file__).resolve().parents[2] / "build/native-deps/model-engine-chat"),
+    ))
+    if mode == "engine" and not (engine_directory / "genai_config.json").is_file():
+        print("Engine inference skipped: run native/tests/fetch_model.py first")
+        return 77
     process = subprocess.Popen(
         [executable], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True, encoding="utf-8",
@@ -53,7 +120,10 @@ def main():
         send({"id": "deep", "method": "discover", "extra": [[[[0]]]]})
         assert receive("deep", "error")["code"] == "invalid_request"
         send({"id": "d", "method": "discover"})
-        if mode == "runtime":
+        if mode == "engine":
+            receive("d", "providers")
+            engine_checks(send, receive, engine_directory)
+        elif mode == "runtime":
             discovery = receive("d", "providers")
             providers = discovery["providers"]
             assert any(d["provider"] == "cpu" and d["deviceId"] == 0 for d in providers), discovery
@@ -266,4 +336,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

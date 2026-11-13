@@ -2,6 +2,8 @@
 #include <ort_genai_c.h>
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <set>
 
@@ -45,6 +47,13 @@ struct Environment {
     if (value) api->ReleaseEnv(value);
   }
 };
+void destroyRequest(OgaRequest* request) {
+  if (auto* error = OgaRequestClose(request)) {
+    std::cerr << "Closing Engine request failed: " << OgaResultGetError(error) << '\n';
+    OgaDestroyResult(error);
+  }
+  OgaDestroyRequest(request);
+}
 
 class GenaiBackend final : public Backend {
  public:
@@ -93,6 +102,7 @@ class GenaiBackend final : public Backend {
   }
   void unload() override {
     caches_.clear();
+    engine_.reset();
     tokenizer_.reset();
     model_.reset();
   }
@@ -135,6 +145,10 @@ class GenaiBackend final : public Backend {
     try {
       check(OgaCreateModelFromConfig(config.value, &model_.value), "load_failed");
       check(OgaCreateTokenizer(model_.value, &tokenizer_.value), "load_failed");
+      std::ifstream input(std::filesystem::u8path(path) / "genai_config.json");
+      const auto metadata = Json::parse(input, nullptr, true, true);
+      if (metadata.contains("engine") && metadata["engine"].contains("dynamic_batching"))
+        check(OgaCreateEngine(model_.value, &engine_.value), "load_failed");
     } catch (...) {
       unload();
       throw;
@@ -154,6 +168,9 @@ class GenaiBackend final : public Backend {
         OgaSequencesGetSequenceCount(input.value, 0) >= static_cast<std::size_t>(maxLength))
       throw Error("invalid_request", "Encoded prompt must be shorter than maxLength");
     if (cancelled.load()) return result;
+    if (engine_.value)
+      return generateEngine(OgaSequencesGetSequenceData(input.value, 0),
+                            OgaSequencesGetSequenceCount(input.value, 0), maxLength, cancelled, token);
     if (!caches_.count(session) && caches_.size() >= maxSessions)
       throw Error("too_many_sessions", "Release a session before starting another one");
     auto& cache = caches_[session];
@@ -280,24 +297,32 @@ class GenaiBackend final : public Backend {
           }
           if (!bytes)
             throw Error("insufficient_context", "Context window is too small for local summarization");
-          Cache summaryCache;
-          prepare(summaryCache, input.data(), input.size(), static_cast<int>(input.size() + reserve));
-          Handle<OgaTokenizerStream, OgaDestroyTokenizerStream> stream;
-          check(OgaCreateTokenizerStream(tokenizer_.value, &stream.value), "generation_failed");
           summary.clear();
-          while (!OgaGenerator_IsDone(summaryCache.generator.value)) {
-            abort();
-            check(OgaGenerator_GenerateNextToken(summaryCache.generator.value), "generation_failed");
-            const int32_t* tokens = nullptr;
-            std::size_t size = 0;
-            check(OgaGenerator_GetNextTokens(summaryCache.generator.value, &tokens, &size),
-                  "generation_failed");
-            if (size != 1 || !tokens) throw Error("generation_failed", "Expected one summary token");
-            const char* chunk = nullptr;
-            check(OgaTokenizerStreamDecode(stream.value, tokens[0], &chunk), "generation_failed");
-            if (chunk) summary += chunk;
+          const auto appendSummary = [&](const std::string& chunk) {
+            summary += chunk;
             if (summary.size() > 512 * 1024)
               throw Error("generation_failed", "Summary exceeds the message size limit");
+          };
+          if (engine_.value) {
+            generateEngine(input.data(), input.size(), static_cast<int>(input.size() + reserve), cancelled,
+                           appendSummary);
+          } else {
+            Cache summaryCache;
+            prepare(summaryCache, input.data(), input.size(), static_cast<int>(input.size() + reserve));
+            Handle<OgaTokenizerStream, OgaDestroyTokenizerStream> stream;
+            check(OgaCreateTokenizerStream(tokenizer_.value, &stream.value), "generation_failed");
+            while (!OgaGenerator_IsDone(summaryCache.generator.value)) {
+              abort();
+              check(OgaGenerator_GenerateNextToken(summaryCache.generator.value), "generation_failed");
+              const int32_t* tokens = nullptr;
+              std::size_t size = 0;
+              check(OgaGenerator_GetNextTokens(summaryCache.generator.value, &tokens, &size),
+                    "generation_failed");
+              if (size != 1 || !tokens) throw Error("generation_failed", "Expected one summary token");
+              const char* chunk = nullptr;
+              check(OgaTokenizerStreamDecode(stream.value, tokens[0], &chunk), "generation_failed");
+              if (chunk) appendSummary(chunk);
+            }
           }
           if (summary.find_first_not_of(" \r\n\t") == std::string::npos)
             throw Error("insufficient_context", "The model produced no context summary");
@@ -320,6 +345,9 @@ class GenaiBackend final : public Backend {
       const auto input = encodeChat(reduced);
       if (input.size() > budget || input.size() >= original)
         throw Error("insufficient_context", "Context could not be reduced");
+      // Engine requests are scoped to one generation. The next turn prefills
+      // the reduced history, without generating a hidden token here.
+      if (engine_.value) return {reduced, 0};
       if (!caches_.count(session) && caches_.size() >= maxSessions)
         throw Error("too_many_sessions", "Release a session before starting another one");
       // GenAI v0.19 has no drop-prefix KV API. Destroy the old cache and
@@ -336,6 +364,84 @@ class GenaiBackend final : public Backend {
   }
 
  private:
+  Generation generateEngine(const int32_t* tokens, std::size_t count, int maxLength,
+                            const std::atomic_bool& cancelled,
+                            const std::function<void(const std::string&)>& token) {
+    Handle<OgaRequestOptions, OgaDestroyRequestOptions> options;
+    check(OgaCreateRequestOptions(&options.value), "generation_failed");
+    check(OgaRequestOptionsSetMaxSessionTokens(options.value, maxLength), "generation_failed");
+    // Close completed requests so dormant conversations cannot occupy all
+    // fixed-state slots. The Engine owns cross-request prefix caching.
+    Handle<OgaRequest, destroyRequest> request;
+    check(OgaEngineCreateRequest(engine_.value, options.value, &request.value), "generation_failed");
+    Handle<OgaTurnOptions, OgaDestroyTurnOptions> turn;
+    check(OgaRequestCreateTurnOptions(request.value, &turn.value), "generation_failed");
+    check(OgaTurnOptionsSetMaxGeneratedTokens(turn.value, maxLength - count), "generation_failed");
+    Handle<OgaEngineEventBuffer, OgaDestroyEngineEventBuffer> events;
+    check(OgaCreateEngineEventBuffer(engine_.value, 8, &events.value), "generation_failed");
+    Handle<OgaTokenizerStream, OgaDestroyTokenizerStream> stream;
+    check(OgaCreateTokenizerStream(tokenizer_.value, &stream.value), "generation_failed");
+    uint64_t turnId = 0;
+    check(OgaRequestBeginTurn(request.value, turn.value, tokens, count, &turnId), "generation_failed");
+    Generation result;
+    bool finished = false;
+    bool cancellationSent = false;
+    while (!finished) {
+      if (cancelled.load() && !cancellationSent) {
+        bool accepted = false;
+        check(OgaRequestCancelTurn(request.value, turnId, &accepted), "generation_failed");
+        cancellationSent = true;
+      }
+      check(OgaEngineRun(engine_.value, events.value), "generation_failed");
+      for (std::size_t i = 0; i < OgaEngineEventBufferGetCount(events.value); ++i) {
+        const auto* event = OgaEngineEventBufferGet(events.value, i);
+        const OgaRequest* owner = nullptr;
+        check(OgaEngineEventGetRequest(event, &owner), "generation_failed");
+        if (owner != request.value) throw Error("generation_failed", "Engine returned an unknown request");
+        OgaEngineEventFlags flags = 0;
+        check(OgaEngineEventGetFlags(event, &flags), "generation_failed");
+        if (flags & (OgaEngineEventFlag_Failed | OgaEngineEventFlag_CapacityBlocked)) {
+          OgaErrorCode code = OgaErrorCode_None;
+          check(OgaEngineEventGetErrorCode(event, &code), "generation_failed");
+          if (code == OgaErrorCode_EngineContractFailure || code == OgaErrorCode_EngineExecutionFailure) {
+            // Fatal events expose only a code; admission rethrows the Engine's
+            // retained native exception, including the actual ORT diagnostic.
+            Handle<OgaRequest, destroyRequest> diagnostic;
+            check(OgaEngineCreateRequest(engine_.value, nullptr, &diagnostic.value), "generation_failed");
+          }
+          throw Error("generation_failed", "GenAI Engine request failed (error code " + std::to_string(code) +
+                                               ((flags & OgaEngineEventFlag_CapacityBlocked)
+                                                    ? "): insufficient runtime cache capacity"
+                                                    : ")"));
+        }
+        if (flags & OgaEngineEventFlag_Token) {
+          int32_t next = 0;
+          check(OgaEngineEventGetToken(event, &next), "generation_failed");
+          const char* chunk = nullptr;
+          check(OgaTokenizerStreamDecode(stream.value, next, &chunk), "generation_failed");
+          if (!cancelled.load() && chunk && *chunk) token(chunk);
+        }
+        if (flags & OgaEngineEventFlag_TurnFinished) {
+          const OgaTurnUsage* usage = nullptr;
+          check(OgaEngineEventGetUsage(event, &usage), "generation_failed");
+          uint64_t generated = 0;
+          uint64_t cached = 0;
+          check(OgaTurnUsageGetGeneratedTokens(usage, &generated), "generation_failed");
+          check(OgaTurnUsageGetCachedPromptTokens(usage, &cached), "generation_failed");
+          result.generatedTokens = generated;
+          result.cachedTokens = cached;
+          finished = true;
+        }
+      }
+      if (!finished) {
+        bool pending = false;
+        check(OgaEngineHasPendingRequests(engine_.value, &pending), "generation_failed");
+        if (!pending) throw Error("generation_failed", "Engine stopped without completing the request");
+      }
+    }
+    check(OgaRequestClose(request.value), "generation_failed");
+    return result;
+  }
   std::vector<int32_t> encodeChat(const Json& messages) {
     Handle<const char, OgaDestroyString> formatted;
     check(OgaTokenizerApplyChatTemplate(tokenizer_.value, nullptr, messages.dump().c_str(), nullptr, true,
@@ -445,6 +551,7 @@ class GenaiBackend final : public Backend {
   std::optional<int> cudaDevice_;
   Handle<OgaModel, OgaDestroyModel> model_;
   Handle<OgaTokenizer, OgaDestroyTokenizer> tokenizer_;
+  Handle<OgaEngine, OgaDestroyEngine> engine_;
   // Declared after the model so session caches are destroyed first.
   std::map<std::string, Cache> caches_;
 };
