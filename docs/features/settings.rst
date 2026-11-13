@@ -5,8 +5,78 @@ Select **Settings** at the top right of the conversation, or the **Settings**
 tab of the right panel, to show the settings panel. A repository session does
 not need to be running. **All settings in VS Code...** opens the complete
 DevDash Agents settings page in VS Code. The panel is the only place in the
-application where the Copilot model, the local model and the local device are
-changed.
+application where machines, workers, models and devices are configured.
+
+Machines and single-model workers
+---------------------------------
+
+**Machines** and **Workers** are saved together in
+``devdashAgents.execution``. The first save initializes this configuration from
+the legacy defaults; those defaults remain available in the collapsible
+**Legacy defaults and Foundry catalogue browser** section.
+
+Keep exactly one machine with identifier ``local`` and an empty connection
+command. The form initially edits that machine; select **Add a remote machine**
+to configure another one. Every machine defines its absolute **Repositories
+directory** and **Models storage directory**, plus its native worker and Copilot
+CLI executables.
+Other entries use a noninteractive connection command such as ``ssh user@host``
+or ``az ssh vm ...`` accepting ``--`` followed by a quoted remote command.
+Remote hosts require a POSIX shell and GNU utilities; local hosts also support
+Windows. When a remote machine's native worker executable is the default
+``devdash-genai-worker`` and is not on its ``PATH``, the first local model
+session on that machine builds it from the sources shipped with the extension
+into ``~/.cache/devdash-agents/engine/<version>`` (Linux x64; requires ``bash``,
+``cmake``, a C++ compiler, ``curl``, ``sha256sum``, ``tar`` and ``flock``;
+several minutes, with a progress notification). A failed build reports the
+last lines of its log. Any other executable must already exist on the machine. Machine identifiers must be unique, but multiple entries may connect
+to the same physical host and use different directories.
+
+Save operations finish one at a time; the form reports success or any error
+next to the machine or worker settings.
+
+Each worker chooses one machine, exactly one model source, and **CPU** or
+**CUDA** with a device index. Model sources are:
+
+* **Copilot agent**: uses the authenticated Copilot CLI of the session's
+  harness machine. One Copilot worker can serve every machine: install and sign
+  in to the Copilot CLI on a remote machine, save it, then choose it as the
+  harness machine in the session dialog.
+* **ONNX/GenAI file or directory**: files must have their complete GenAI
+  configuration, weights and tokenizer in the same model directory.
+* **Transformers checkpoint file or directory**: must have ``config.json``,
+  weights and tokenizer alongside it.
+* **Hugging Face model ID**: downloads and exports a supported checkpoint.
+* **Foundry catalogue model ID**: downloads the complete GenAI package. The
+  worker form lists the public catalogue for the selected device (CPU or CUDA)
+  and fills the ``azureml://...`` ID from the chosen model. This list is not
+  filtered by the extension host's memory because the worker may be remote.
+
+Relative file/checkpoint paths are resolved under the worker machine's models
+directory. GenAI models load directly; checkpoint and Hub exports use the
+model builder installed on the worker machine, targeting its selected provider.
+Exports and downloads are kept in that machine's models storage. For remote
+Foundry workers the extension resolves the file list, then the remote machine
+downloads the files itself with ``curl`` (required there); signed URLs are sent
+on standard input, and progress appears in the **Log** tab. An isolated
+ONNX weights file without configuration, and GGUF models, are not supported.
+
+**Add** in the session toolbar selects a worker, the worker machine running its
+model, and the harness machine on which repository files and commands execute
+(see :doc:`sessions`). Copilot CLI runs directly on the harness machine,
+where it must already be installed and authenticated. Repositories
+must already exist at ``<repositories directory>/<repository folder name>``;
+the application does not clone or synchronize them.
+
+Each session saves a snapshot of its worker and machines, also for parallel
+requests, history exports and reopening. Editing or deleting a configuration
+entry cannot silently redirect existing sessions or switch their model.
+Snapshots include connection commands in unencrypted history; do not embed
+credentials in these commands.
+**New** preserves the assignment; **Add** chooses another worker or machine.
+Sessions assigned to the same worker share its loaded model with separate KV
+caches; distinct worker identifiers use separate native processes, even when
+their model and physical machine are identical.
 
 Harness settings
 ----------------
@@ -19,20 +89,21 @@ URL origins** (``devdashAgents.approvedUrlOrigins``). Click **Save harness
 settings** to persist them in the usual VS Code configuration; changes made in
 VS Code also appear in the panel.
 
-Executable paths apply to new Copilot sessions and new local workers, not to
-processes already running. Use only trusted executables; neither path is
+Executable paths here are legacy defaults; configured workers use the executable
+paths saved in their machine assignment. Use only trusted executables; neither path is
 executed through a shell. The timeout must be a whole number from 1 to 35791.
 URL approvals are HTTP or HTTPS origins, one per line, without paths or
 credentials. They apply across repositories; remove an origin to require
 approval again. HTTPS GitHub file reads remain automatically approved.
 
-Copilot model
--------------
+Legacy Copilot model
+--------------------
 
 **Copilot model** lists the models available through the SDK when the panel is
 first shown (**Refresh models** lists them again). The choice is saved in
 ``devdashAgents.model`` and switches open Copilot sessions from their next
-message. **CLI default** applies to sessions opened afterwards.
+message for unassigned legacy sessions only. Assigned sessions always retain
+their worker model. **CLI default** applies to sessions opened afterwards.
 
 Local model
 -----------
@@ -100,8 +171,8 @@ marked unverified. Runtime overhead and generation caches can require more
 memory. The download does not change **Local session device**: choose a device
 matching the variant's execution provider.
 
-Execution machine
------------------
+Legacy execution machine
+------------------------
 
 **Execution machine** chooses where local sessions run: **This computer** or a
 remote machine. Fill **Add or update a remote machine** and click **Save and
@@ -146,6 +217,15 @@ The choice is saved in ``devdashAgents.localProvider`` and
 ``devdashAgents.localDeviceId``. It selects the device for the next local
 model load. Move a loaded shared model between devices, or unload it to DISK,
 in the **Sessions** panel; moving or unloading discards all local KV caches.
+
+Idle worker timeout
+-------------------
+
+``devdashAgents.workerIdleMinutes`` (Settings panel: **Stop idle workers**)
+stops a worker after this many minutes without a running request, freeing its
+memory. It defaults to 30; 0 disables it. Local model sessions stay open and
+reload the model on their next request; KV caches are lost. Copilot sessions
+are closed with their transcript kept and continue with **Resume**.
 
 Request timeout
 ---------------

@@ -79,6 +79,12 @@ if(BUILD_TESTING)
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/process_test.py"
             "$<TARGET_FILE:devdash-genai-worker>"
             "$<IF:$<BOOL:${ARRANGED_WITH_GENAI}>,runtime,no-runtime>")
+  if(ARRANGED_WITH_GENAI)
+    add_test(NAME worker-engine-generation
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/process_test.py"
+              "$<TARGET_FILE:devdash-genai-worker>" engine)
+    set_tests_properties(worker-engine-generation PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+  endif()
   add_test(NAME worker-package-validation
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/package_test.py")
   set_tests_properties(worker-policy-protocol worker-cuda-driver-discovery PROPERTIES TIMEOUT 30)

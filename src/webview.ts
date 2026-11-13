@@ -573,6 +573,7 @@ declare function acquireVsCodeApi(): {
     "request-timeout-minutes",
     HTMLInputElement,
   );
+  const workerIdleMinutes = element("worker-idle-minutes", HTMLInputElement);
   const approvedUrlOrigins = element(
     "approved-url-origins",
     HTMLTextAreaElement,
@@ -587,6 +588,7 @@ declare function acquireVsCodeApi(): {
     "cli-path": "cliPath",
     "local-worker-path": "localWorkerPath",
     "request-timeout-minutes": "requestTimeoutMinutes",
+    "worker-idle-minutes": "workerIdleMinutes",
     "approved-url-origins": "approvedUrlOrigins",
   };
   const dirtyHarnessFields = new Map<HarnessSettingKey, number>();
@@ -633,6 +635,8 @@ declare function acquireVsCodeApi(): {
       settings.localWorkerPath = localWorkerPath.value;
     if (dirty.has("requestTimeoutMinutes"))
       settings.requestTimeoutMinutes = requestTimeoutMinutes.valueAsNumber;
+    if (dirty.has("workerIdleMinutes"))
+      settings.workerIdleMinutes = workerIdleMinutes.valueAsNumber;
     if (dirty.has("approvedUrlOrigins"))
       settings.approvedUrlOrigins = approvedUrlOrigins.value
         .split(/\r?\n/)
@@ -692,20 +696,28 @@ declare function acquireVsCodeApi(): {
     update: import("./system-memory").MemoryUpdate,
   ): void => {
     const gpus = update.cuda ?? [];
+    // With a CUDA worker, only its device matters; otherwise list every GPU.
+    const shown = gpus
+      .map((gpu, index) => ({ gpu, index }))
+      .filter(
+        ({ index }) =>
+          update.deviceId === undefined || index === update.deviceId,
+      );
     const parts = [
       `CPU ${gigabytes(update.cpu.free)}`,
-      ...gpus.map(
-        (gpu, index) =>
+      ...shown.map(
+        ({ gpu, index }) =>
           `CUDA${gpus.length > 1 ? ` ${index}` : ""} ${gigabytes(gpu.free)}`,
       ),
     ];
-    systemMemory.textContent = `Free: ${parts.join(" · ")}`;
+    systemMemory.textContent = `${update.machine ? `${update.machine} free` : "Free"}: ${parts.join(" · ")}`;
     const lowMemory =
       update.cpu.free < 300 * 1024 ** 2 ||
-      gpus.some((gpu) => gpu.free < 300 * 1024 ** 2);
+      shown.some(({ gpu }) => gpu.free < 300 * 1024 ** 2);
     if (lowMemory) systemMemory.textContent += " · Low memory: offload a model";
     systemMemory.classList.toggle("memory-warning", lowMemory);
     systemMemory.title = [
+      `Memory of ${update.machine ?? "this computer"} (the worker machine of the displayed session)`,
       `CPU: ${gigabytes(update.cpu.free)} available of ${gigabytes(update.cpu.total)}`,
       ...gpus.map(
         (gpu, index) =>
@@ -714,6 +726,221 @@ declare function acquireVsCodeApi(): {
     ].join("\n");
     systemMemory.hidden = false;
   };
+  const assignmentDialog = element("assignment-dialog", HTMLElement);
+  const assignmentForm = element("assignment-form", HTMLFormElement);
+  const assignmentTitle = element("assignment-title", HTMLElement);
+  const assignmentWorker = element("assignment-worker", HTMLSelectElement);
+  const assignmentWorkerMachine = element(
+    "assignment-worker-machine",
+    HTMLSelectElement,
+  );
+  const assignmentHarness = element(
+    "assignment-harness-machine",
+    HTMLSelectElement,
+  );
+  const assignmentSummary = element("assignment-summary", HTMLElement);
+  const assignmentBackground = [
+    document.querySelector<HTMLElement>("main.application")!,
+    element("repository-menu", HTMLElement),
+  ];
+  let assignmentFocus: HTMLElement | undefined;
+  let backgroundWasInert: boolean[] | undefined;
+  let assignmentRequest:
+    { requestId: string; repositoryId: string; backend?: string } | undefined;
+  const assignmentModelKinds: Record<string, string> = {
+    copilot: "Copilot",
+    file: "GenAI files",
+    checkpoint: "Transformers checkpoint",
+    "model-id": "Hugging Face",
+    foundry: "Foundry",
+  };
+  const describeWorker = (
+    worker: import("./execution").WorkerConfiguration,
+  ): string =>
+    worker.backend === "copilot"
+      ? `Copilot agent · model ${worker.model.source || "CLI default"}`
+      : `${assignmentModelKinds[worker.model.kind] ?? worker.model.kind}: ${worker.model.source} · ${worker.provider === "cuda" ? `CUDA device ${worker.deviceId}` : "CPU"}`;
+  const describeMachine = (
+    machine: import("./execution").MachineConfiguration,
+  ): string =>
+    `${machine.name} (${machine.command ? "remote" : "this computer"})`;
+  const repositoryFolder = (id: string): string =>
+    id.split(/[\\/]/).filter(Boolean).at(-1) ?? id;
+  const updateAssignmentDialog = (): void => {
+    const execution = settingsState?.execution;
+    const worker = execution?.workers.find(
+      (entry) => entry.id === assignmentWorker.value,
+    );
+    const copilot = worker?.backend === "copilot";
+    // Copilot always runs on the harness machine.
+    if (copilot) assignmentWorkerMachine.value = assignmentHarness.value;
+    assignmentWorkerMachine.disabled = copilot;
+    const machine = (id: string) =>
+      execution?.machines.find((entry) => entry.id === id);
+    const workerMachine = machine(assignmentWorkerMachine.value);
+    const harness = machine(assignmentHarness.value);
+    element("assignment-worker-hint", HTMLElement).textContent = worker
+      ? describeWorker(worker)
+      : "";
+    element("assignment-worker-machine-hint", HTMLElement).textContent = copilot
+      ? "Copilot runs on the harness machine."
+      : workerMachine
+        ? `Model files in ${workerMachine.modelsPath}${workerMachine.command ? `; native worker ${workerMachine.workerPath} (built on first use if missing)` : ""}.`
+        : "";
+    const folder = assignmentRequest
+      ? repositoryFolder(assignmentRequest.repositoryId)
+      : "";
+    const repositoryPath = harness
+      ? `${harness.repositoriesPath.replace(/[\\/]+$/, "")}/${folder}`
+      : "";
+    element("assignment-harness-machine-hint", HTMLElement).textContent =
+      harness ? `Repository: ${repositoryPath}` : "";
+    assignmentSummary.textContent =
+      worker && workerMachine && harness
+        ? [
+            `Agent and model: ${worker.name} (${describeWorker(worker)})`,
+            `Model runs on: ${describeMachine(workerMachine)}`,
+            `Files and commands on: ${describeMachine(harness)} in ${repositoryPath}`,
+          ].join("\n")
+        : "";
+  };
+  const closeAssignmentDialog = (choice?: {
+    workerId: string;
+    workerMachineId: string;
+    executionMachineId: string;
+  }): void => {
+    if (!assignmentRequest) return;
+    vscode.postMessage({
+      type: "assignment-choice",
+      requestId: assignmentRequest.requestId,
+      ...(choice ? { choice } : {}),
+    });
+    assignmentRequest = undefined;
+    assignmentDialog.hidden = true;
+    if (backgroundWasInert)
+      assignmentBackground.forEach((element, index) => {
+        if (!backgroundWasInert?.[index]) element.removeAttribute("inert");
+      });
+    backgroundWasInert = undefined;
+    if (assignmentFocus?.isConnected) assignmentFocus.focus();
+    assignmentFocus = undefined;
+  };
+  const openAssignmentDialog = (request: {
+    requestId: string;
+    repositoryId: string;
+    backend?: string;
+  }): void => {
+    closeAssignmentDialog();
+    const execution = settingsState?.execution;
+    const workers =
+      execution?.workers.filter(
+        (worker) => !request.backend || worker.backend === request.backend,
+      ) ?? [];
+    assignmentRequest = request;
+    if (!execution || !workers.length) {
+      closeAssignmentDialog();
+      return;
+    }
+    assignmentFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : undefined;
+    backgroundWasInert = assignmentBackground.map((element) =>
+      element.hasAttribute("inert"),
+    );
+    assignmentBackground.forEach((element) =>
+      element.setAttribute("inert", ""),
+    );
+    assignmentTitle.textContent = `New ${request.backend === "local" ? "local model " : request.backend === "copilot" ? "Copilot " : ""}session for ${repositoryFolder(request.repositoryId)}`;
+    const fill = (
+      select: HTMLSelectElement,
+      entries: { value: string; label: string }[],
+    ): void => {
+      select.replaceChildren(
+        ...entries.map(({ value, label }) => {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = label;
+          return option;
+        }),
+      );
+    };
+    fill(
+      assignmentWorker,
+      workers.map((worker) => ({
+        value: worker.id,
+        label: `${worker.name} — ${describeWorker(worker)}`,
+      })),
+    );
+    const machines = execution.machines.map((machine) => ({
+      value: machine.id,
+      label: describeMachine(machine),
+    }));
+    fill(assignmentWorkerMachine, machines);
+    fill(assignmentHarness, machines);
+    const selectWorker = (): void => {
+      const worker = workers.find(
+        (entry) => entry.id === assignmentWorker.value,
+      );
+      if (worker) {
+        assignmentWorkerMachine.value = worker.machineId;
+        if (worker.backend === "copilot")
+          assignmentHarness.value = worker.machineId;
+      }
+      updateAssignmentDialog();
+    };
+    assignmentHarness.value =
+      execution.machines.find((machine) => !machine.command)?.id ??
+      execution.machines[0]?.id ??
+      "";
+    selectWorker();
+    assignmentWorker.onchange = selectWorker;
+    assignmentDialog.hidden = false;
+    assignmentWorker.focus();
+  };
+  assignmentWorkerMachine.addEventListener("change", updateAssignmentDialog);
+  assignmentHarness.addEventListener("change", updateAssignmentDialog);
+  assignmentForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    closeAssignmentDialog({
+      workerId: assignmentWorker.value,
+      workerMachineId: assignmentWorkerMachine.value,
+      executionMachineId: assignmentHarness.value,
+    });
+  });
+  element("assignment-cancel", HTMLButtonElement).addEventListener(
+    "click",
+    () => closeAssignmentDialog(),
+  );
+  assignmentDialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeAssignmentDialog();
+    } else if (event.key === "Tab") {
+      const controls = [
+        ...assignmentForm.querySelectorAll<
+          HTMLButtonElement | HTMLSelectElement
+        >("button, select"),
+      ].filter((control) => !control.disabled);
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    }
+  });
+  document.addEventListener("focusin", (event) => {
+    if (
+      assignmentRequest &&
+      event.target instanceof Node &&
+      !assignmentDialog.contains(event.target)
+    )
+      assignmentWorker.focus();
+  });
   let copilotModelsRequested = false;
   const showSettings = (): void => {
     if (copilotModelsRequested) return;
@@ -741,6 +968,459 @@ declare function acquireVsCodeApi(): {
       }),
     );
     select.value = current;
+  };
+  type ExecutionConfiguration = import("./execution").ExecutionConfiguration;
+  type MachineConfiguration = import("./execution").MachineConfiguration;
+  type WorkerConfiguration = import("./execution").WorkerConfiguration;
+  const machineEntry = element("machine-entry", HTMLSelectElement);
+  const workerEntry = element("worker-entry", HTMLSelectElement);
+  const machineForm = element("machine-configuration", HTMLFormElement);
+  const workerForm = element("worker-configuration", HTMLFormElement);
+  const machineFields = {
+    id: element("machine-id", HTMLInputElement),
+    name: element("machine-name", HTMLInputElement),
+    command: element("machine-command", HTMLInputElement),
+    repositoriesPath: element("machine-repositories", HTMLInputElement),
+    modelsPath: element("machine-models", HTMLInputElement),
+    workerPath: element("machine-worker", HTMLInputElement),
+    cliPath: element("machine-copilot", HTMLInputElement),
+  } satisfies Record<keyof MachineConfiguration, HTMLInputElement>;
+  const workerId = element("worker-id", HTMLInputElement);
+  const workerName = element("worker-name", HTMLInputElement);
+  const workerMachine = element("worker-machine", HTMLSelectElement);
+  const workerKind = element("worker-kind", HTMLSelectElement);
+  const workerSource = element("worker-source", HTMLInputElement);
+  const workerProvider = element("worker-provider", HTMLSelectElement);
+  const workerDevice = element("worker-device", HTMLInputElement);
+  const workerFoundry = element("worker-foundry", HTMLElement);
+  const workerFoundryModel = element("worker-foundry-model", HTMLSelectElement);
+  const listWorkerFoundryModels = element(
+    "list-worker-foundry-models",
+    HTMLButtonElement,
+  );
+  const workerFoundryStatus = element("worker-foundry-status", HTMLElement);
+  type WorkerFoundryCatalogue =
+    | { status: "loading"; requestId: string }
+    | { status: "error"; error: string }
+    | {
+        status: "ready";
+        models: { id: string; name: string; size: number }[];
+      };
+  const workerFoundryCatalogues = new Map<
+    "cpu" | "gpu",
+    WorkerFoundryCatalogue
+  >();
+  const saveMachine = element("save-machine", HTMLButtonElement);
+  const saveWorker = element("save-worker", HTMLButtonElement);
+  const deleteMachine = element("delete-machine", HTMLButtonElement);
+  const deleteWorker = element("delete-worker", HTMLButtonElement);
+  const addMachineCopilotWorker = element(
+    "add-machine-copilot-worker",
+    HTMLButtonElement,
+  );
+  const machineConfigurationStatus = element(
+    "machine-configuration-status",
+    HTMLElement,
+  );
+  const executionConfigurationStatus = element(
+    "execution-configuration-status",
+    HTMLElement,
+  );
+  let executionConfigurationState:
+    "idle" | "saving" | "saved" | "dirty" | "error" = "idle";
+  let executionEditVersion = 0;
+  let savingExecutionEditVersion = 0;
+  let pendingExecutionSave:
+    | { requestId: string; label: "Machine settings" | "Worker settings" }
+    | undefined;
+  const setExecutionConfigurationStatus = (
+    message: string,
+    status: typeof executionConfigurationState = "idle",
+  ): void => {
+    executionConfigurationState = status;
+    machineConfigurationStatus.textContent = message;
+    executionConfigurationStatus.textContent = message;
+  };
+  const updateExecutionConfigurationControls = (): void => {
+    const saving = executionConfigurationState === "saving";
+    machineEntry.disabled = saving;
+    workerEntry.disabled = saving;
+    saveMachine.disabled = saving;
+    saveWorker.disabled = saving;
+    deleteMachine.disabled =
+      saving || !machineEntry.value || machineEntry.value === "local";
+    deleteWorker.disabled = saving || !workerEntry.value;
+    addMachineCopilotWorker.disabled =
+      saving ||
+      !settingsState?.execution?.machines.some(
+        (machine) => machine.id === machineEntry.value,
+      );
+  };
+  const noteExecutionEdit = (): void => {
+    executionEditVersion++;
+    if (executionConfigurationState === "saved")
+      setExecutionConfigurationStatus(
+        "Machine or worker changes are unsaved.",
+        "dirty",
+      );
+  };
+  const saveExecutionConfiguration = (
+    configuration: ExecutionConfiguration,
+    label: "Machine settings" | "Worker settings",
+  ): void => {
+    if (executionConfigurationState === "saving") return;
+    const requestId = crypto.randomUUID();
+    pendingExecutionSave = { requestId, label };
+    savingExecutionEditVersion = executionEditVersion;
+    setExecutionConfigurationStatus("Saving machines and workers...", "saving");
+    updateExecutionConfigurationControls();
+    vscode.postMessage({
+      type: "execution-configuration",
+      requestId,
+      configuration,
+    });
+  };
+  let machineEditorInitialized = false;
+  let machineEditorTouched = false;
+  const fillMachineForm = (): void => {
+    const machine = settingsState?.execution?.machines.find(
+      (entry) => entry.id === machineEntry.value,
+    );
+    machineForm.reset();
+    for (const key of Object.keys(
+      machineFields,
+    ) as (keyof MachineConfiguration)[])
+      machineFields[key].value =
+        machine?.[key] ??
+        (key === "workerPath"
+          ? "devdash-genai-worker"
+          : key === "cliPath"
+            ? "copilot"
+            : "");
+    machineFields.id.readOnly = !!machine;
+    machineFields.command.readOnly = machine?.id === "local";
+    updateExecutionConfigurationControls();
+  };
+  const noteMachineEdit = (): void => {
+    machineEditorTouched = true;
+    noteExecutionEdit();
+  };
+  machineForm.addEventListener("input", noteMachineEdit);
+  machineForm.addEventListener("change", noteMachineEdit);
+  workerForm.addEventListener("input", noteExecutionEdit);
+  workerForm.addEventListener("change", noteExecutionEdit);
+  machineEntry.addEventListener("change", () => {
+    machineEditorTouched = true;
+    fillMachineForm();
+    if (executionConfigurationState === "error")
+      setExecutionConfigurationStatus("");
+  });
+  machineForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (executionConfigurationState === "saving") return;
+    const config = settingsState?.execution;
+    if (!config) {
+      setExecutionConfigurationStatus(
+        "Machines and workers are still loading.",
+      );
+      return;
+    }
+    if (!machineForm.reportValidity()) return;
+    const machine: MachineConfiguration = {
+      id: machineFields.id.value.trim(),
+      name: machineFields.name.value.trim(),
+      command: machineFields.command.value.trim(),
+      repositoriesPath: machineFields.repositoriesPath.value.trim(),
+      modelsPath: machineFields.modelsPath.value.trim(),
+      workerPath: machineFields.workerPath.value.trim(),
+      cliPath: machineFields.cliPath.value.trim(),
+    };
+    if (
+      !machineEntry.value &&
+      config.machines.some((entry) => entry.id === machine.id)
+    ) {
+      setExecutionConfigurationStatus(
+        machine.id === "local"
+          ? "The local machine already exists; select it in Edit machine."
+          : "Choose a unique machine identifier; the host/connection may be repeated.",
+        "error",
+      );
+      return;
+    }
+    saveExecutionConfiguration(
+      {
+        ...config,
+        machines: [
+          ...config.machines.filter((entry) => entry.id !== machine.id),
+          machine,
+        ],
+      },
+      "Machine settings",
+    );
+  });
+  deleteMachine.addEventListener("click", () => {
+    if (executionConfigurationState === "saving") return;
+    const config = settingsState?.execution;
+    if (!config || !machineEntry.value || machineEntry.value === "local")
+      return;
+    if (
+      config.workers.some((worker) => worker.machineId === machineEntry.value)
+    ) {
+      setExecutionConfigurationStatus(
+        "Delete or reassign this machine's workers first.",
+        "error",
+      );
+      return;
+    }
+    saveExecutionConfiguration(
+      {
+        ...config,
+        machines: config.machines.filter(
+          (entry) => entry.id !== machineEntry.value,
+        ),
+      },
+      "Machine settings",
+    );
+  });
+  const workerFoundryDevice = (): "cpu" | "gpu" =>
+    workerProvider.value === "cuda" ? "gpu" : "cpu";
+  const requestWorkerFoundryModels = (): void => {
+    const device = workerFoundryDevice();
+    const requestId = crypto.randomUUID();
+    workerFoundryCatalogues.set(device, { status: "loading", requestId });
+    vscode.postMessage({ type: "worker-foundry-models", requestId, device });
+  };
+  const renderWorkerFoundry = (): void => {
+    const foundry = workerKind.value === "foundry";
+    workerFoundry.hidden = !foundry;
+    if (!foundry) return;
+    const device = workerFoundryDevice();
+    if (!workerFoundryCatalogues.has(device)) requestWorkerFoundryModels();
+    const catalogue = workerFoundryCatalogues.get(device)!;
+    const models = catalogue.status === "ready" ? catalogue.models : [];
+    const source = workerSource.value.trim();
+    const known = models.some((model) => model.id === source);
+    replaceOptions(
+      workerFoundryModel,
+      [
+        {
+          value: "",
+          label:
+            catalogue.status === "loading"
+              ? "Loading the catalogue..."
+              : catalogue.status === "error"
+                ? "Catalogue unavailable"
+                : models.length
+                  ? "Choose a model"
+                  : "No compatible model",
+        },
+        ...(source && !known && catalogue.status === "ready"
+          ? [{ value: source, label: `${source} (not in the catalogue)` }]
+          : []),
+        ...models.map((model) => ({
+          value: model.id,
+          label: `${model.name} - ${formatBytes(model.size)}`,
+        })),
+      ],
+      catalogue.status === "ready" ? source : "",
+    );
+    workerFoundryModel.disabled = catalogue.status !== "ready";
+    listWorkerFoundryModels.disabled = catalogue.status === "loading";
+    workerFoundryStatus.textContent =
+      catalogue.status === "loading"
+        ? `Listing Foundry Local ${device === "gpu" ? "CUDA" : "CPU"} models...`
+        : catalogue.status === "error"
+          ? `Could not list Foundry Local models: ${catalogue.error}`
+          : `${models.length} ${device === "gpu" ? "CUDA" : "CPU"} model(s) in the catalogue.`;
+  };
+  workerFoundryModel.addEventListener("change", () => {
+    workerSource.value = workerFoundryModel.value;
+  });
+  workerProvider.addEventListener("change", () => renderWorkerFoundry());
+  workerSource.addEventListener("input", () => renderWorkerFoundry());
+  listWorkerFoundryModels.addEventListener("click", () => {
+    requestWorkerFoundryModels();
+    renderWorkerFoundry();
+  });
+  addMachineCopilotWorker.addEventListener("click", () => {
+    if (executionConfigurationState === "saving") return;
+    const config = settingsState?.execution;
+    const machine = config?.machines.find(
+      (entry) => entry.id === machineEntry.value,
+    );
+    if (!config || !machine) return;
+    let id = `copilot-${machine.id}`.slice(0, 100);
+    for (
+      let index = 2;
+      config.workers.some((entry) => entry.id === id);
+      index++
+    )
+      id = `copilot-${machine.id}`.slice(0, 90) + `-${index}`;
+    saveExecutionConfiguration(
+      {
+        ...config,
+        workers: [
+          ...config.workers,
+          {
+            id,
+            name: `Copilot @ ${machine.name}`.slice(0, 100),
+            machineId: machine.id,
+            backend: "copilot",
+            model: { kind: "copilot", source: "" },
+            provider: "cpu",
+            deviceId: 0,
+          },
+        ],
+      },
+      "Worker settings",
+    );
+  });
+  const workerKindHint = element("worker-kind-hint", HTMLElement);
+  const updateWorkerKind = (): void => {
+    const copilot = workerKind.value === "copilot";
+    const machine = settingsState?.execution?.machines.find(
+      (entry) => entry.id === workerMachine.value,
+    );
+    const place = machine
+      ? `${machine.name}${machine.command ? " (remote)" : " (this computer)"}`
+      : "the selected machine";
+    workerKindHint.textContent = copilot
+      ? `The Copilot CLI (${machine?.cliPath ?? "copilot"}) runs on ${place}; it must be installed and signed in there. Its sessions edit files and run commands on ${place}.`
+      : `The model runs on ${place}. Each session using this worker chooses separately which machine edits files and runs commands.`;
+    workerSource.required = !copilot;
+    workerProvider.disabled = copilot;
+    workerDevice.disabled = copilot;
+    const suggestions = copilot
+      ? (settingsState?.copilotModels ?? []).map((model) => ({
+          id: model.id,
+          name: model.name,
+        }))
+      : [];
+    element("worker-model-suggestions", HTMLDataListElement).replaceChildren(
+      ...suggestions.map((model) => {
+        const option = document.createElement("option");
+        option.value = model.id;
+        option.label = model.name;
+        return option;
+      }),
+    );
+    renderWorkerFoundry();
+  };
+  workerKind.addEventListener("change", updateWorkerKind);
+  workerMachine.addEventListener("change", updateWorkerKind);
+  workerEntry.addEventListener("change", () => {
+    const worker = settingsState?.execution?.workers.find(
+      (entry) => entry.id === workerEntry.value,
+    );
+    workerForm.reset();
+    workerId.value = worker?.id ?? "";
+    workerId.readOnly = !!worker;
+    workerName.value = worker?.name ?? "";
+    workerMachine.value = worker?.machineId ?? "local";
+    workerKind.value = worker?.model.kind ?? "copilot";
+    workerSource.value = worker?.model.source ?? "";
+    workerProvider.value = worker?.provider ?? "cpu";
+    workerDevice.value = String(worker?.deviceId ?? 0);
+    updateExecutionConfigurationControls();
+    updateWorkerKind();
+    if (executionConfigurationState === "error")
+      setExecutionConfigurationStatus("");
+  });
+  workerForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (executionConfigurationState === "saving") return;
+    const config = settingsState?.execution;
+    if (!config || !workerForm.reportValidity()) return;
+    if (
+      !workerEntry.value &&
+      config.workers.some((entry) => entry.id === workerId.value.trim())
+    ) {
+      setExecutionConfigurationStatus(
+        "Choose a unique worker identifier.",
+        "error",
+      );
+      return;
+    }
+    const worker: WorkerConfiguration = {
+      id: workerId.value.trim(),
+      name: workerName.value.trim(),
+      machineId: workerMachine.value,
+      backend: workerKind.value === "copilot" ? "copilot" : "local",
+      model: {
+        kind: workerKind.value as WorkerConfiguration["model"]["kind"],
+        source: workerSource.value.trim(),
+      },
+      provider: workerProvider.value as WorkerConfiguration["provider"],
+      deviceId: Number(workerDevice.value),
+    };
+    saveExecutionConfiguration(
+      {
+        ...config,
+        workers: [
+          ...config.workers.filter((entry) => entry.id !== worker.id),
+          worker,
+        ],
+      },
+      "Worker settings",
+    );
+  });
+  deleteWorker.addEventListener("click", () => {
+    if (executionConfigurationState === "saving") return;
+    const config = settingsState?.execution;
+    if (!config || !workerEntry.value) return;
+    saveExecutionConfiguration(
+      {
+        ...config,
+        workers: config.workers.filter(
+          (entry) => entry.id !== workerEntry.value,
+        ),
+      },
+      "Worker settings",
+    );
+  });
+  const renderExecutionConfiguration = (): void => {
+    const config = settingsState?.execution;
+    if (!config) return;
+    const initializeMachine =
+      !machineEditorInitialized && !machineEditorTouched;
+    replaceOptions(
+      machineEntry,
+      [
+        { value: "", label: "Add a remote machine" },
+        ...config.machines.map((machine) => ({
+          value: machine.id,
+          label: `${machine.name} (${machine.id})`,
+        })),
+      ],
+      initializeMachine ? "local" : machineEntry.value,
+    );
+    if (initializeMachine) fillMachineForm();
+    machineEditorInitialized = true;
+    replaceOptions(
+      workerEntry,
+      [
+        { value: "", label: "Add a worker" },
+        ...config.workers.map((worker) => ({
+          value: worker.id,
+          label: `${worker.name} - ${worker.model.source || "CLI default"} @ ${worker.machineId}`,
+        })),
+      ],
+      workerEntry.value,
+    );
+    replaceOptions(
+      workerMachine,
+      config.machines.map((machine) => ({
+        value: machine.id,
+        label: `${machine.name} (${machine.id})`,
+      })),
+      workerMachine.value || "local",
+    );
+    updateWorkerKind();
+    if (executionConfigurationState === "idle")
+      setExecutionConfigurationStatus(
+        `${config.machines.length} machine(s), ${config.workers.length} worker(s).`,
+      );
+    updateExecutionConfigurationControls();
   };
   type RemoteMachine = import("./remote").RemoteMachine;
   const executionMachine = element("execution-machine", HTMLSelectElement);
@@ -831,12 +1511,15 @@ declare function acquireVsCodeApi(): {
   };
   const renderSettings = (): void => {
     const settings = settingsState;
+    renderExecutionConfiguration();
     if (settings) {
       if (!dirtyHarnessFields.has("cliPath")) cliPath.value = settings.cliPath;
       if (!dirtyHarnessFields.has("localWorkerPath"))
         localWorkerPath.value = settings.localWorkerPath;
       if (!dirtyHarnessFields.has("requestTimeoutMinutes"))
         requestTimeoutMinutes.value = String(settings.requestTimeoutMinutes);
+      if (!dirtyHarnessFields.has("workerIdleMinutes"))
+        workerIdleMinutes.value = String(settings.workerIdleMinutes);
       if (!dirtyHarnessFields.has("approvedUrlOrigins"))
         approvedUrlOrigins.value = settings.approvedUrlOrigins.join("\n");
     }
@@ -1238,6 +1921,7 @@ declare function acquireVsCodeApi(): {
     return undefined;
   }
   let localModels: import("./local-model-host").LocalModelSnapshot[] = [];
+  let copilotWorkers: import("./application").CopilotWorkerSnapshot[] = [];
   const statusLabels = {
     idle: "Not started",
     saved: "Session closed - use Resume or New",
@@ -1268,7 +1952,102 @@ declare function acquireVsCodeApi(): {
       : statusLabels[status];
   }
 
+  function renderWorkerTable(): void {
+    const body = document.querySelector<HTMLTableSectionElement>(
+      "#worker-table tbody",
+    )!;
+    const focused =
+      document.activeElement instanceof HTMLButtonElement &&
+      body.contains(document.activeElement)
+        ? document.activeElement.dataset.hostId
+        : undefined;
+    const running = localModels.filter(
+      (model) => model.status !== "disk" && model.status !== "unloaded",
+    );
+    const count = running.length + copilotWorkers.length;
+    element("worker-table", HTMLTableElement).hidden = !count;
+    element("worker-table-empty", HTMLElement).hidden = !!count;
+    const autoStop = (busy: boolean, at?: number): string =>
+      busy
+        ? "not while running"
+        : at === undefined
+          ? "never"
+          : `at ${new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    const row = (
+      cells: string[],
+      key: string,
+      disabled: boolean,
+      title: string,
+      message: import("./application").ApplicationMessage,
+    ): HTMLTableRowElement => {
+      const row = document.createElement("tr");
+      for (const text of cells) {
+        const cell = document.createElement("td");
+        cell.textContent = text;
+        row.append(cell);
+      }
+      const actions = document.createElement("td");
+      const stop = document.createElement("button");
+      stop.type = "button";
+      stop.textContent = "Stop";
+      stop.dataset.hostId = key;
+      stop.title = title;
+      stop.disabled = disabled;
+      stop.addEventListener("click", () => vscode.postMessage(message));
+      actions.append(stop);
+      row.append(actions);
+      return row;
+    };
+    body.replaceChildren(
+      ...running.map((model) =>
+        row(
+          [
+            model.workerName ?? "Legacy local model",
+            model.machineName ?? "This computer",
+            model.name ?? model.modelPath,
+            model.device
+              ? `${model.device.provider.toUpperCase()} ${model.device.deviceId}`
+              : model.placement.provider.toUpperCase(),
+            model.busy ? "running a request" : model.status,
+            String(model.sessions.length),
+            autoStop(model.busy, model.idleStopAt),
+          ],
+          model.id ?? "",
+          !model.id || model.busy || model.status === "loading",
+          model.busy
+            ? "Wait for the running request to finish"
+            : "Stop this worker and free its memory; sessions reload it when needed",
+          { type: "stop-local-worker", hostId: model.id ?? "" },
+        ),
+      ),
+      ...copilotWorkers.map((worker) =>
+        row(
+          [
+            worker.workerName,
+            worker.machineName,
+            `Copilot: ${worker.model}`,
+            "Copilot CLI",
+            worker.busy ? "running a request" : "ready",
+            String(worker.sessions.length),
+            autoStop(worker.busy, worker.idleStopAt),
+          ],
+          `copilot:${worker.groupId}`,
+          worker.busy,
+          worker.busy
+            ? "Wait for the running requests to finish"
+            : "Close this worker's Copilot CLI sessions and free their memory; Resume continues them",
+          { type: "stop-copilot-worker", groupId: worker.groupId },
+        ),
+      ),
+    );
+    if (focused)
+      [...body.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.dataset.hostId === focused)
+        ?.focus();
+  }
+
   function renderLocalModels(): void {
+    renderWorkerTable();
     const focused =
       document.activeElement instanceof HTMLButtonElement &&
       localModelsContainer.contains(document.activeElement)
@@ -1538,7 +2317,7 @@ declare function acquireVsCodeApi(): {
         return [
           {
             value: session.view,
-            text: `${session.backend === "copilot" ? "Copilot" : "Local"} ${index}${session.model ? ` - ${session.model}` : ""}${session.readOnly ? " (read-only)" : ""}`,
+            text: `${session.backend === "copilot" ? "Copilot" : "Local"} ${index}${"assignment" in session && session.assignment ? ` - ${session.assignment.worker.name} | commands: ${session.assignment.executionMachine.name}` : ""}${session.model ? ` - ${session.model}` : ""}${session.readOnly ? " (read-only)" : ""}`,
           },
         ];
       },
@@ -3071,7 +3850,35 @@ declare function acquireVsCodeApi(): {
             type: "local-models";
             models: import("./local-model-host").LocalModelSnapshot[];
           }
+        | {
+            type: "copilot-workers";
+            workers: import("./application").CopilotWorkerSnapshot[];
+          }
         | { type: "error"; message: string; id?: string }
+        | {
+            type: "execution-configuration-error";
+            requestId?: string;
+            message: string;
+          }
+        | ({
+            type: "worker-foundry-models";
+            requestId: string;
+            device: "cpu" | "gpu";
+          } & (
+            | { models: { id: string; name: string; size: number }[] }
+            | { error: string }
+          ))
+        | {
+            type: "choose-assignment";
+            requestId: string;
+            repositoryId: string;
+            backend?: "copilot" | "local";
+          }
+        | {
+            type: "execution-configuration-saved";
+            requestId: string;
+            configuration: ExecutionConfiguration;
+          }
         | {
             type: "dataset-sessions";
             sessions: DatasetSession[];
@@ -3100,6 +3907,51 @@ declare function acquireVsCodeApi(): {
     ) => {
       if (event.data.type === "state") {
         render(event.data.state);
+      } else if (event.data.type === "execution-configuration-saved") {
+        if (
+          executionConfigurationState !== "saving" ||
+          event.data.requestId !== pendingExecutionSave?.requestId
+        )
+          return;
+        const label = pendingExecutionSave.label;
+        pendingExecutionSave = undefined;
+        if (settingsState) {
+          settingsState = {
+            ...settingsState,
+            execution: event.data.configuration,
+          };
+          renderExecutionConfiguration();
+        }
+        const newerEdits = executionEditVersion !== savingExecutionEditVersion;
+        setExecutionConfigurationStatus(
+          newerEdits
+            ? `${label} saved; newer edits are unsaved.`
+            : `${label} saved.`,
+          newerEdits ? "dirty" : "saved",
+        );
+        updateExecutionConfigurationControls();
+      } else if (event.data.type === "worker-foundry-models") {
+        const current = workerFoundryCatalogues.get(event.data.device);
+        if (
+          current?.status !== "loading" ||
+          current.requestId !== event.data.requestId
+        )
+          return;
+        workerFoundryCatalogues.set(
+          event.data.device,
+          "error" in event.data
+            ? { status: "error", error: event.data.error }
+            : { status: "ready", models: event.data.models },
+        );
+        renderWorkerFoundry();
+      } else if (event.data.type === "execution-configuration-error") {
+        if (event.data.requestId !== pendingExecutionSave?.requestId) return;
+        pendingExecutionSave = undefined;
+        setExecutionConfigurationStatus(
+          `Could not save machines and workers: ${event.data.message}`,
+          "error",
+        );
+        updateExecutionConfigurationControls();
       } else if (event.data.type === "dataset-sessions") {
         renderDataset(event.data.sessions);
         if (event.data.saved) {
@@ -3141,10 +3993,15 @@ declare function acquireVsCodeApi(): {
         }
         updateHarnessSaveButton();
         renderSettings();
+      } else if (event.data.type === "copilot-workers") {
+        copilotWorkers = event.data.workers;
+        renderWorkerTable();
       } else if (event.data.type === "local-models") {
         localModels = event.data.models;
         renderLocalModels();
         updateControls();
+      } else if (event.data.type === "choose-assignment") {
+        openAssignmentDialog(event.data);
       } else if (event.data.type === "memory") {
         renderMemory(event.data);
       } else if (event.data.type === "settings-state") {

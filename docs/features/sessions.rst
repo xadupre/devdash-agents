@@ -5,14 +5,28 @@ Every repository can have multiple Copilot and local sessions open at the same
 time. Each has its own transcript and draft; switching sessions never merges model
 context. Sessions start lazily and continue independently while another session
 is displayed. Selecting a repository only displays its current view and draft;
-use **Add** and choose **Copilot** or **Local** to open an independent session.
+use **Add** to open an independent session. Its dialog has three choices:
+
+1. **Worker**: the agent and its model, with the model source and CPU/CUDA device.
+2. **Worker machine**: where the model runs; it defaults to the worker's machine
+   and can be any configured machine. Copilot always runs on the harness machine.
+3. **Harness machine**: holds the repository, edits files and runs commands; its
+   repository path is shown.
+
+A summary repeats the three choices before **Create session**.
+Long steps are recorded in the **Log** tab and the *DevDash Agents* output
+channel, labelled by machine or worker, with their duration or error: native
+worker lookup and remote build, engine installation, model download (every 5% or minute, on the worker machine),
+copy, export or inspection, device discovery, model loading, and manual or idle
+worker stops.
 The **Session** dropdown lists all open sessions in the selected repository.
 **Close** stops only the selected session, leaving its transcript available.
 **Resume** lists the repository's saved Copilot sessions,
 including ones started from the Copilot CLI, and resumes the chosen one; a
 session started outside DevDash Agents keeps its model context but its earlier
 messages are not shown. **New** closes and archives the selected conversation
-and replaces it with a fresh session of the same type; other sessions remain open.
+and replaces it with a fresh session using the same worker and machine assignment;
+other sessions remain open. Session labels show the worker and command machine.
 Model and device selection stays in the Settings tab, not in this toolbar.
 
 The compact colored timing band in the bottom message-action row shows generation
@@ -46,8 +60,9 @@ the same parent directory restores the interface without starting Copilot.
 Local inference
 ---------------
 
-**Add**, then **Local**, uses the local ONNX Runtime GenAI model directory chosen
-in the settings panel (see :doc:`settings`); choose one there first. Native release VSIX assets bundle a ready-to-run CPU or CUDA engine
+**Add**, then a native model worker, uses its model source, CPU/CUDA device and
+machine defined in the settings panel (see :doc:`settings`).
+Inference and repository execution machines can differ. Native release VSIX assets bundle a ready-to-run CPU or CUDA engine
 for :doc:`supported platforms <../getting_started>`. Models are not bundled.
 In a Linux x64 source checkout, the first local session builds a missing engine
 automatically (about two minutes, with a progress notification).
@@ -55,10 +70,14 @@ External workers, including NPU/vendor runtimes, can be selected with
 ``devdashAgents.localWorkerPath``. The engine runs on
 the workspace extension host, including in SSH, WSL and dev containers.
 
-One model worker is shared by all local sessions that use the same model
-directory and device, including sessions in different repositories. Each conversation has
-an isolated KV cache. The worker serializes inference requests so sessions do
-not overlap calls into ONNX Runtime GenAI.
+One model worker is shared by all sessions assigned to that worker,
+including sessions in different repositories. Distinct worker identifiers run
+independently, even for the same model and device. Conversation histories remain
+isolated. The worker serializes inference requests so sessions do not overlap
+calls into ONNX Runtime GenAI. Models configured for dynamic batching, including
+Qwen models with CPU embeddings, use GenAI Engine; other models use Generator.
+Engine releases each request after generation and manages a shared prefix cache
+instead of reserving a private KV cache for each idle conversation.
 
 The **Sessions** panel lists loaded models and their open local sessions,
 including cached tokens and an approximate KV byte size, context usage and
@@ -77,11 +96,21 @@ but cannot generate until CUDA, NPU or CPU is selected in the Sessions panel;
 that selection starts a fresh worker and the conversation's prompt is evaluated
 again to rebuild its cache.
 
-Use **Add**, then **Local**, to open another independent local conversation for the
-same repository. Each new session uses the model and device currently selected
-in Settings; changing those settings does not move existing sessions. Sessions
-on different GPUs use separate workers, while sessions sharing a model and
-device share its worker with separate context caches. Choose a conversation in
+The **Running workers** table at the top of the Sessions panel lists each
+loaded local model worker and each Copilot worker with open sessions, with its
+machine, model, device, status, session count and automatic stop time.
+**Stop** frees its memory immediately. A local model worker's process stops and
+its sessions stay open; their next request reloads the model and rebuilds the
+cache. A Copilot worker's CLI sessions are closed like **Close**: transcripts
+are kept and **Resume** continues them. Idle workers stop automatically after
+``devdashAgents.workerIdleMinutes`` (30 by default; 0 never stops them). A
+worker never stops while a request is running; the delay restarts after each
+request.
+
+Use **Add**, then a native worker, to open another independent local conversation for the
+same repository. Each new session saves its chosen worker and execution machine;
+changing Settings does not move existing sessions. Sessions
+assigned to the same worker share it with separate conversation histories. Choose a conversation in
 the **Session** selector or the Sessions panel. Drafts, transcripts,
 cancellation and context reduction belong to the selected conversation; saved
 transcripts are retained across application restarts.
@@ -109,10 +138,16 @@ unchanged; subsequent messages use only the reduced context. These controls are
 unavailable during inference or while the model is unloaded. They do not modify
 Copilot's remotely managed context. With fixed-capacity shared KV buffers, fewer
 cached tokens do not necessarily reduce allocated GPU memory.
+For Engine models, reduction updates the history without retaining a private
+request or generating a hidden token; the next turn prefills the reduced history.
 Use **Cancel context reduction** in the Sessions panel to interrupt either
 action. Summaries can lose details; the original transcript remains available
 for reference.
 
+The free memory under the prompt is the worker machine's memory for the displayed
+session: available RAM and, for a CUDA worker, its device (hover for every GPU).
+A remote worker machine is sampled at most every 30 seconds over its connection
+command. Without a session, it is this computer's memory.
 If free CPU or CUDA memory drops below 300 MiB, the composer and Sessions panel
 show a warning to offload a model. KV byte counts are estimates based on model
 dimensions and cache precision. ONNX Runtime's memory arena and other runtime
@@ -149,11 +184,12 @@ to 2000 characters of the model response in the log and final error message.
 Generation uses up to 8192
 tokens including the prompt, capped by the model's configured context length,
 so file results are not restricted to the worker's 2048-token default.
-Each local session keeps its own KV cache while the shared model is loaded. A
-new turn only processes the tokens after the prefix it shares with the cached
-conversation, so follow-up turns do not recompute the history. Closing a local
-session releases only its cache. A new session or failed generation resets that
-cache; offloading or moving the shared model discards every local cache.
+Generator models keep a KV cache per local session while the shared model is
+loaded. A new turn processes only tokens after its reusable cached prefix.
+Closing a session releases its private cache; a new session or failed generation
+resets it. Engine models reuse prefixes where their runtime supports it and
+report actual cached prompt tokens, but show zero private session-cache tokens
+between requests. Offloading or moving the shared model discards every cache.
 Local sessions do not support images or resumable runtime
 context. PostMortem, which uses Copilot, is unavailable while a local session is
 selected. Closing the last local session using a model unloads its worker; open

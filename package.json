@@ -44,6 +44,142 @@
     "configuration": {
       "title": "DevDash Agents v0.1.0",
       "properties": {
+        "devdashAgents.execution": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "default": null,
+          "scope": "machine",
+          "additionalProperties": false,
+          "required": [
+            "machines",
+            "workers"
+          ],
+          "properties": {
+            "machines": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "name",
+                  "command",
+                  "repositoriesPath",
+                  "modelsPath",
+                  "workerPath",
+                  "cliPath"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,100}$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "command": {
+                    "type": "string",
+                    "description": "Empty for id=local; otherwise a connection command accepting -- and a remote command. May be repeated across machine entries."
+                  },
+                  "repositoriesPath": {
+                    "type": "string",
+                    "description": "Absolute repositories root on this machine."
+                  },
+                  "modelsPath": {
+                    "type": "string",
+                    "description": "Absolute model sources, downloads and exports root on this machine."
+                  },
+                  "workerPath": {
+                    "type": "string",
+                    "default": "devdash-genai-worker"
+                  },
+                  "cliPath": {
+                    "type": "string",
+                    "default": "copilot"
+                  }
+                }
+              }
+            },
+            "workers": {
+              "type": "array",
+              "maxItems": 128,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "name",
+                  "machineId",
+                  "backend",
+                  "model",
+                  "provider",
+                  "deviceId"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,100}$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "machineId": {
+                    "type": "string"
+                  },
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "copilot",
+                      "local"
+                    ]
+                  },
+                  "model": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "source"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "copilot",
+                          "file",
+                          "checkpoint",
+                          "model-id",
+                          "foundry"
+                        ]
+                      },
+                      "source": {
+                        "type": "string",
+                        "maxLength": 4096
+                      }
+                    }
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "cpu",
+                      "cuda"
+                    ]
+                  },
+                  "deviceId": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "description": "Machines and single-model workers, edited in Settings. Null migrates legacy defaults. Each new session selects a worker and an execution machine and saves an immutable assignment."
+        },
         "devdashAgents.cliPath": {
           "type": "string",
           "default": "copilot",
@@ -152,6 +288,13 @@
           "minimum": 1,
           "maximum": 35791,
           "description": "Maximum total duration of a Copilot operation in minutes, including tools and permission waits. Changes apply to subsequent operations, including in existing sessions."
+        },
+        "devdashAgents.workerIdleMinutes": {
+          "type": "integer",
+          "default": 30,
+          "minimum": 0,
+          "maximum": 10080,
+          "description": "Stop a worker after this many minutes without any running request, freeing its memory. Local model sessions stay open and reload the model on their next request (KV caches are lost); Copilot sessions are closed with their transcript kept and continue with Resume. 0 never stops idle workers."
         }
       }
     }

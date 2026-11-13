@@ -27,6 +27,7 @@ const headers = {
   "x-ms-use-full-service-contracts": "true",
 };
 const MANIFEST = FOUNDRY_MANIFEST;
+const FETCH_ATTEMPTS = 3;
 
 /** Execution providers the native worker can run, by Foundry provider name. */
 const PROVIDERS: Record<string, Exclude<LocalProvider, "auto">> = {
@@ -178,11 +179,37 @@ async function request(
   init: RequestInit,
   options: FoundryOptions,
 ): Promise<Response> {
-  const response = await (options.fetch ?? fetch)(url, {
-    ...init,
-    signal: options.signal,
-    redirect: "error",
-  });
+  let response: Response | undefined;
+  for (let attempt = 1; !response; attempt++) {
+    try {
+      response = await (options.fetch ?? fetch)(url, {
+        ...init,
+        signal: options.signal,
+        redirect: "error",
+      });
+    } catch (error) {
+      options.signal?.throwIfAborted();
+      // Node reports network failures as "fetch failed"; the cause says why.
+      const cause =
+        error instanceof Error && error.cause instanceof Error
+          ? error.cause
+          : undefined;
+      const detail = [
+        error instanceof Error ? error.message : String(error),
+        cause && "code" in cause ? String(cause.code) : undefined,
+        cause?.message,
+      ]
+        .filter(Boolean)
+        .join(": ")
+        .replace(/[?&]sig=[^\s&]*/g, "?sig=…");
+      if (attempt >= FETCH_ATTEMPTS)
+        throw new Error(
+          `Foundry Local request to ${new URL(url).host} failed after ${attempt} attempts: ${detail}`,
+          { cause: error },
+        );
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+    }
+  }
   if (!response.ok) {
     await response.body?.cancel();
     // Signed blob URLs are credentials and must never appear in error messages.
@@ -486,6 +513,38 @@ function cacheDirectory(id: string, cacheRoot: string): string {
     "foundry",
     createHash("sha256").update(id).digest("hex"),
   );
+}
+
+/**
+ * Lists the files of the package's GenAI model directory with signed download
+ * URLs, so another machine can fetch them. The URLs are credentials.
+ */
+export async function foundryModelFiles(
+  id: string,
+  options: FoundryOptions = {},
+): Promise<{ path: string; size: number; url: string }[]> {
+  if (!isFoundryModelId(id)) throw new Error("Invalid Foundry Local model ID.");
+  const registry = new URL(registryUrl);
+  registry.searchParams.set("assetId", id);
+  const response = await request(registry, { headers }, options);
+  const data: unknown = await response.json();
+  if (!object(data))
+    throw new Error("Invalid Foundry Local registry response.");
+  const container = blobUrl(data.blobSasUri);
+  const files = await listFiles(container, options);
+  const [model = "."] = genaiDirectories(files);
+  const prefix = model === "." ? "" : `${model}/`;
+  return files
+    .filter((file) => file.path.startsWith(prefix))
+    .map((file) => {
+      const url = new URL(container);
+      url.pathname = `${url.pathname.replace(/\/$/, "")}/${file.path.split("/").map(encodeURIComponent).join("/")}`;
+      return {
+        path: file.path.slice(prefix.length),
+        size: file.size,
+        url: url.href,
+      };
+    });
 }
 
 /**

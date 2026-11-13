@@ -277,6 +277,13 @@ export function renderApplication(resources: {
     <section id="sessions-view" aria-label="Local model sessions" hidden>
       <h2>Sessions</h2>
       <p class="repository-hint">Local models are shared across repositories. Each session has a separate KV cache. KV size is an estimate; runtime allocator overhead may be higher.</p>
+      <h3 id="worker-table-title">Running workers</h3>
+      <table id="worker-table" aria-labelledby="worker-table-title">
+        <thead><tr><th scope="col">Worker</th><th scope="col">Machine</th><th scope="col">Model</th><th scope="col">Device</th><th scope="col">Status</th><th scope="col">Sessions</th><th scope="col">Auto-stop</th><th scope="col">Actions</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="worker-table-empty">No worker is running.</p>
+      <p class="repository-hint">Stop frees a worker's memory now. Local model sessions stay open and reload the model on their next request; Copilot sessions are closed with their transcript kept and continue with <strong>Resume</strong>. Idle workers stop automatically after the delay set in Settings.</p>
       <div id="local-models"><p>No local model is loaded.</p></div>
     </section>
     <section id="dataset-view" aria-label="Session dataset" hidden>
@@ -343,22 +350,78 @@ export function renderApplication(resources: {
     </section>
     <section id="settings-view" aria-label="Settings" hidden>
       <h2>Settings</h2>
+      <section class="settings-group" aria-labelledby="machines-title">
+        <h3 id="machines-title">Machines</h3>
+        <p class="repository-hint">One local machine and any number of remote entries. Different identifiers may connect to the same host. Paths belong to that machine; remote hosts require a POSIX shell and standard GNU utilities. To use Copilot on a remote machine, install and sign in to the Copilot CLI there, save the machine, then select <strong>Add Copilot worker on this machine</strong>.</p>
+        <label for="machine-entry">Edit machine</label>
+        <select id="machine-entry"><option value="">Add a remote machine</option></select>
+        <form id="machine-configuration">
+          <label for="machine-id">Identifier (stable, unique)</label><input id="machine-id" required pattern="[A-Za-z0-9_\\-]{1,100}" maxlength="100">
+          <label for="machine-name">Display name</label><input id="machine-name" required maxlength="100">
+          <label for="machine-command">Connection command (empty for local)</label><input id="machine-command" maxlength="4096" placeholder="ssh user@host">
+          <label for="machine-repositories">Repositories directory (absolute path)</label><input id="machine-repositories" required maxlength="4096">
+          <label for="machine-models">Models storage directory (absolute path)</label><input id="machine-models" required maxlength="4096">
+          <label for="machine-worker">Native worker executable</label><input id="machine-worker" required maxlength="4096" value="devdash-genai-worker">
+          <label for="machine-copilot">Copilot CLI executable</label><input id="machine-copilot" required maxlength="4096" value="copilot">
+          <button id="save-machine" type="submit">Save machine</button><button id="delete-machine" type="button" disabled>Delete machine</button><button id="add-machine-copilot-worker" type="button" disabled title="Create a worker that runs the Copilot CLI on this machine">Add Copilot worker on this machine</button>
+          <p id="machine-configuration-status"></p>
+        </form>
+      </section>
+      <section class="settings-group" aria-labelledby="workers-title">
+        <h3 id="workers-title">Workers</h3>
+        <p class="repository-hint">Each worker has exactly one model. Add a session to choose its worker and execution machine independently. Copilot runs on its execution machine. Existing sessions keep their saved assignment when Settings change.</p>
+        <label for="worker-entry">Edit worker</label><select id="worker-entry"><option value="">Add a worker</option></select>
+        <form id="worker-configuration">
+          <label for="worker-id">Identifier (stable, unique)</label><input id="worker-id" required pattern="[A-Za-z0-9_\\-]{1,100}" maxlength="100">
+          <label for="worker-name">Display name</label><input id="worker-name" required maxlength="100">
+          <label for="worker-machine">Runs on machine (Copilot CLI or model)</label><select id="worker-machine"></select>
+          <label for="worker-kind">Agent and model source</label>
+          <select id="worker-kind">
+            <option value="copilot">Copilot agent (model ID; empty = CLI default)</option>
+            <option value="file">ONNX/GenAI file or directory</option>
+            <option value="checkpoint">Transformers checkpoint file or directory</option>
+            <option value="model-id">Hugging Face model ID</option>
+            <option value="foundry">Foundry catalogue model ID</option>
+          </select>
+          <label for="worker-source">Path or model ID</label><input id="worker-source" maxlength="4096" list="worker-model-suggestions">
+          <datalist id="worker-model-suggestions"></datalist>
+          <p id="worker-kind-hint" class="repository-hint"></p>
+          <div id="worker-foundry" hidden>
+            <label for="worker-foundry-model">Foundry catalogue model (for the selected device)</label>
+            <div class="settings-row">
+              <select id="worker-foundry-model" disabled><option value="">Loading the catalogue...</option></select>
+              <button id="list-worker-foundry-models" type="button" title="Reload Microsoft's public Foundry Local catalogue">Refresh</button>
+            </div>
+            <p id="worker-foundry-status" class="settings-status" role="status"></p>
+          </div>
+          <label for="worker-provider">Device</label><select id="worker-provider"><option value="cpu">CPU</option><option value="cuda">CUDA</option></select>
+          <label for="worker-device">Device index</label><input id="worker-device" type="number" min="0" step="1" value="0" required>
+          <p class="repository-hint">Relative file/checkpoint paths use the worker machine's models directory. Files need their GenAI or Transformers configuration, weights and tokenizer alongside them; standalone ONNX and GGUF are not supported. Checkpoints and model IDs are exported on the worker machine using Python model-builder dependencies. Foundry packages are downloaded then streamed to remote storage if needed.</p>
+          <button id="save-worker" type="submit">Save worker</button><button id="delete-worker" type="button" disabled>Delete worker</button>
+        </form>
+        <p id="execution-configuration-status" role="status"></p>
+      </section>
       <form id="harness-settings" class="settings-group" aria-labelledby="harness-settings-title">
         <h3 id="harness-settings-title">Harness settings</h3>
         <label for="cli-path">Copilot CLI executable</label>
         <input id="cli-path" type="text" value="copilot" required maxlength="4096">
         <label for="local-worker-path">Local worker executable</label>
         <input id="local-worker-path" type="text" value="devdash-genai-worker" required maxlength="4096">
-        <p class="repository-hint">Use trusted executables only. Executed directly without a shell. Paths apply to new Copilot sessions and new local workers; restart existing sessions to use a changed executable.</p>
+        <p class="repository-hint">Use trusted executables only. These paths are legacy defaults, executed directly without a shell. Configured workers use the paths saved in their machine assignment; existing sessions keep that assignment.</p>
         <label for="request-timeout-minutes">Request timeout (minutes)</label>
         <input id="request-timeout-minutes" type="number" value="60" min="1" max="35791" step="1" required>
         <p class="repository-hint">Applies to subsequent Copilot operations, including in existing sessions. Running operations keep their deadline.</p>
+        <label for="worker-idle-minutes">Stop idle workers (local models and Copilot) after (minutes, 0 = never)</label>
+        <input id="worker-idle-minutes" type="number" value="30" min="0" max="10080" step="1" required>
+        <p class="repository-hint">Frees the model's memory when no request has run for this long. Sessions stay open and reload the model on their next request; KV caches are lost.</p>
         <label for="approved-url-origins">Approved URL origins (one per line)</label>
         <textarea id="approved-url-origins" rows="3" placeholder="https://example.com"></textarea>
         <p class="repository-hint">These HTTP or HTTPS roots may be read without asking again across repositories. Remove a root to require approval again. GitHub file reads remain automatically approved.</p>
         <button id="save-harness-settings" type="submit">Save harness settings</button>
         <p id="harness-settings-status" role="status" aria-live="polite"></p>
       </form>
+      <details><summary>Legacy defaults and Foundry catalogue browser</summary>
+      <p class="repository-hint">Legacy defaults initialize machines and workers until the new configuration is first saved. Afterwards, edit machines and workers above. The catalogue browser below supplies Foundry IDs for worker model sources.</p>
       <section class="settings-group" aria-labelledby="copilot-model-title">
         <h3 id="copilot-model-title">Copilot model</h3>
         <label for="copilot-model">Model used by Copilot sessions</label>
@@ -368,7 +431,7 @@ export function renderApplication(resources: {
         </div>
         <p id="copilot-model-status" class="settings-status" role="status"></p>
         <p id="copilot-model-error" class="settings-error" role="alert" hidden></p>
-        <p class="repository-hint">Switches open Copilot sessions from their next message and applies to future sessions. CLI default applies to sessions opened afterwards.</p>
+        <p class="repository-hint">Changes unassigned legacy Copilot sessions only. Configured workers and their sessions keep their own model. CLI default applies to unassigned sessions opened afterwards.</p>
       </section>
       <section class="settings-group" aria-labelledby="execution-machine-title">
         <h3 id="execution-machine-title">Execution machine</h3>
@@ -432,10 +495,27 @@ export function renderApplication(resources: {
         <p class="repository-hint">This preference is used the next time a shared model is loaded. Move a loaded model between devices or unload it in the Sessions panel.</p>
       </section>
       <button id="open-vscode-settings" type="button" title="Open all DevDash Agents settings in VS Code">All settings in VS Code...</button>
+      </details>
     </section>
   </aside>
 </main>
 <div id="repository-menu" role="menu" aria-label="Repository session actions" hidden></div>
+<div id="assignment-dialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="assignment-title" hidden>
+  <form id="assignment-form" class="modal-body">
+    <h2 id="assignment-title">New session</h2>
+    <label for="assignment-worker">1. Worker: agent and model</label>
+    <select id="assignment-worker" required></select>
+    <p id="assignment-worker-hint" class="repository-hint"></p>
+    <label for="assignment-worker-machine">2. Worker machine: runs the model (its CPU/GPU memory is shown under the prompt)</label>
+    <select id="assignment-worker-machine" required></select>
+    <p id="assignment-worker-machine-hint" class="repository-hint"></p>
+    <label for="assignment-harness-machine">3. Harness machine: holds the repository, edits files and runs commands</label>
+    <select id="assignment-harness-machine" required></select>
+    <p id="assignment-harness-machine-hint" class="repository-hint"></p>
+    <p id="assignment-summary" role="status"></p>
+    <div class="modal-actions"><button id="assignment-create" type="submit">Create session</button><button id="assignment-cancel" type="button">Cancel</button></div>
+  </form>
+</div>
 <script nonce="${nonce}" src="${escape(resources.scriptUri)}"></script>
 </body>
 </html>`;

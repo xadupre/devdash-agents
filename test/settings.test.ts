@@ -7,6 +7,7 @@ const settings = {
   cliPath: "/tools/copilot",
   localWorkerPath: "/tools/local worker",
   requestTimeoutMinutes: 60,
+  workerIdleMinutes: 30,
   approvedUrlOrigins: ["https://example.com", "http://localhost:8080"],
 };
 
@@ -32,10 +33,14 @@ test("harness settings messages accept existing settings and discard unknown key
       baseApprovedUrlOrigins: settings.approvedUrlOrigins,
     },
   );
-  for (const requestTimeoutMinutes of [1, 35791]) {
+  for (const [requestTimeoutMinutes, workerIdleMinutes] of [
+    [1, 0],
+    [35791, 10080],
+  ]) {
     const value = {
       ...settings,
       requestTimeoutMinutes,
+      workerIdleMinutes,
       approvedUrlOrigins: [],
     };
     assert.deepEqual(
@@ -110,6 +115,10 @@ test("harness settings messages reject invalid paths, timeouts and URL approvals
     ...[undefined, null, "60", 0, -1, 1.5, 35792, NaN, Infinity].map(
       (requestTimeoutMinutes) => ({ ...settings, requestTimeoutMinutes }),
     ),
+    ...[undefined, "30", -1, 1.5, 10081, NaN].map((workerIdleMinutes) => ({
+      ...settings,
+      workerIdleMinutes,
+    })),
     ...[
       null,
       "https://example.com",

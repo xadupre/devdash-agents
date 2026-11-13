@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   findLocalModelHost,
   LocalModelHost,
@@ -731,4 +732,136 @@ test("automatic device selection omits deviceId when loading", async () => {
   assert.deepEqual(worker.loads, [
     { path: "/model", provider: "auto", deviceId: undefined },
   ]);
+});
+
+test("idle workers stop after the timeout, busy ones never, and Stop frees memory on demand", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const workers: Worker[] = [];
+  let timeout = 1000;
+  const host = new LocalModelHost(
+    "/model",
+    { provider: "cpu", deviceId: 0 },
+    () => {
+      workers.push(new Worker());
+      return workers.at(-1)!;
+    },
+    () => {},
+    () => {},
+    undefined,
+    () => timeout,
+  );
+  const session = host.attach("repo", "s");
+  const flush = async (): Promise<void> => {
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+  };
+  await session.generateChat([], () => {}, undefined, 64);
+  assert.equal(host.snapshot().idleStopAt, Date.now() + 1000);
+  t.mock.timers.tick(999);
+  await flush();
+  assert.equal(host.currentStatus, "ready");
+
+  const gate = deferred();
+  workers[0]!.nextGeneration = () => gate.promise;
+  const running = session.generateChat([], () => {}, undefined, 64);
+  await flush();
+  assert.equal(host.snapshot().idleStopAt, undefined);
+  t.mock.timers.tick(5000);
+  await flush();
+  assert.equal(host.currentStatus, "ready", "never stops during a request");
+  workers[0]!.nextGeneration = undefined;
+  gate.resolve();
+  await running;
+  t.mock.timers.tick(1000);
+  await flush();
+  assert.equal(host.currentStatus, "unloaded");
+  assert.equal(workers[0]!.stops, 1);
+  assert.equal(host.snapshot().sessions[0]!.cacheTokens, 0);
+  assert.equal(host.snapshot().idleStopAt, undefined);
+
+  await session.generateChat([], () => {}, undefined, 64);
+  assert.equal(workers.length, 2, "the next request reloads the model");
+  await host.stop();
+  assert.equal(host.currentStatus, "unloaded");
+  assert.equal(workers[1]!.stops, 1);
+
+  timeout = 0;
+  await session.generateChat([], () => {}, undefined, 64);
+  assert.equal(host.snapshot().idleStopAt, undefined, "0 disables the timeout");
+  await session.stop();
+});
+
+test("changing the idle timeout cancels and rearms an already idle worker", async (t) => {
+  const worker = new Worker();
+  let timeout = 100;
+  const host = new LocalModelHost(
+    "/model",
+    { provider: "cpu", deviceId: 0 },
+    () => worker,
+    () => {},
+    () => {},
+    undefined,
+    () => timeout,
+  );
+  const session = host.attach("repo");
+  t.after(() => session.stop());
+  await session.generateChat([], () => {});
+  const firstDeadline = host.snapshot().idleStopAt!;
+  timeout = 500;
+  host.refreshIdleTimeout();
+  assert.equal(host.snapshot().idleStopAt, firstDeadline + 400);
+  timeout = 0;
+  host.refreshIdleTimeout();
+  assert.equal(host.snapshot().idleStopAt, undefined);
+  await delay(150);
+  assert.equal(worker.stops, 0);
+  const stopped = deferred();
+  worker.stopStarted = stopped.resolve;
+  timeout = 1;
+  host.refreshIdleTimeout();
+  await Promise.race([
+    stopped.promise,
+    delay(3000).then(() => {
+      throw new Error("Idle worker was not stopped");
+    }),
+  ]);
+  assert.equal(worker.stops, 1);
+});
+
+test("reports worker load, idle stop and failure events", async () => {
+  const events: string[] = [];
+  const host = new LocalModelHost(
+    "/model",
+    { provider: "cuda", deviceId: 1 },
+    () => new Worker(),
+    undefined,
+    undefined,
+    undefined,
+    () => 1,
+    (message, level = "info") => events.push(`${level}: ${message}`),
+  );
+  const session = host.attach("repo");
+  await session.load("/model", "cuda", 1);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(host.currentStatus, "unloaded");
+  assert.match(events[0]!, /^info: Starting the worker .* on CUDA 1/);
+  assert.match(events[1]!, /^info: Model loaded on .* in \d+\.\d s\.$/);
+  assert.match(events[2]!, /^info: Idle for 0 min; stopping the worker/);
+  assert.equal(events[3], "info: Worker stopped; its memory is freed.");
+
+  const failing = new LocalModelHost(
+    "/model",
+    { provider: "cpu", deviceId: 0 },
+    () =>
+      Object.assign(new Worker(), {
+        loadGate: Promise.reject(new Error("boom")),
+      }),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    (message, level = "info") => events.push(`${level}: ${message}`),
+  );
+  await assert.rejects(failing.attach("repo").load("/model", "cpu", 0));
+  assert.equal(events.at(-1), "error: Model load failed: boom");
+  await session.stop();
 });

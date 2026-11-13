@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -14,6 +23,7 @@ import {
   parseBlobListing,
   type FoundryModel,
 } from "../src/foundry";
+import { downloadRemoteFoundryModel } from "../src/remote-model-source";
 
 const asset = "azureml://registries/azureml/models/phi-fixture/versions/1";
 const GiB = 1024 ** 3;
@@ -70,6 +80,7 @@ async function foundryServer(t: TestContext) {
     blobHost: "fixtures.blob.core.windows.net",
     transferStatus: 200,
     transferSuffix: "",
+    signature: "fixture-signature",
   };
   const escape = (text: string): string =>
     text.replaceAll("&", "&amp;").replaceAll("<", "&lt;");
@@ -101,7 +112,7 @@ async function foundryServer(t: TestContext) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
-            blobSasUri: `https://${state.blobHost}/package?sig=fixture-signature`,
+            blobSasUri: `https://${state.blobHost}/package?sig=${state.signature}`,
           }),
         );
       } else if (url.searchParams.get("comp") === "list") {
@@ -151,7 +162,7 @@ async function foundryServer(t: TestContext) {
     local.search = remote.search;
     return fetch(local, init);
   };
-  return { root, files, requests, state, fetch: localFetch };
+  return { root, files, requests, state, fetch: localFetch, port };
 }
 
 test("Foundry Local lists only text-generation variants the worker can run", async (t) => {
@@ -331,4 +342,116 @@ test("blob listings decode entities and reject DTDs and malformed sizes", () => 
     "<Other/>",
   ])
     assert.throws(() => parseBlobListing(xml));
+});
+
+test(
+  "remote Foundry downloads run on the worker machine and report progress",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const hub = await foundryServer(t);
+    hub.state.signature = 'fixture-signature\\tail"quoted';
+    const bin = join(hub.root, "bin");
+    await mkdir(bin);
+    const realCurl = execFileSync("which", ["curl"], {
+      encoding: "utf8",
+    }).trim();
+    // Redirect curl to the local fixture without putting the signed URL in argv.
+    await writeFile(
+      join(bin, "curl"),
+      `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args.some(arg => arg.includes("fixture-signature"))) process.exit(3);
+let config = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => config += chunk);
+process.stdin.on("end", async () => {
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const curl = require("node:child_process").spawn(${JSON.stringify(realCurl)}, args, { stdio: ["pipe", "ignore", "inherit"] });
+  curl.stdin.end(config.replace("https://fixtures.blob.core.windows.net", "http://127.0.0.1:${hub.port}"));
+  curl.on("error", () => process.exit(1));
+  curl.on("close", code => process.exit(code ?? 1));
+});
+`,
+    );
+    await chmod(join(bin, "curl"), 0o755);
+    const machine = {
+      id: "gpu",
+      name: "GPU host",
+      command: `env "PATH=${bin}:${process.env.PATH}" "${process.execPath}" "${join(__dirname, "fixtures", "remote-shell.js")}"`,
+      repositoriesPath: "/projects",
+      modelsPath: join(hub.root, "remote models"),
+      workerPath: "devdash-genai-worker",
+      cliPath: "copilot",
+    };
+    const progress: { received: number; total: number }[] = [];
+    const signal = AbortSignal.timeout(15_000);
+    const [directory, concurrent] = await Promise.all([
+      downloadRemoteFoundryModel(
+        machine,
+        asset,
+        signal,
+        (value) => progress.push(value),
+        hub.fetch,
+      ),
+      downloadRemoteFoundryModel(machine, asset, signal, undefined, hub.fetch),
+    ]);
+    assert.equal(concurrent, directory);
+    assert.ok(
+      hub.requests.some(
+        (request) =>
+          request.path.startsWith("/package/") &&
+          request.query.get("sig") === hub.state.signature,
+      ),
+    );
+    assert.equal(directory.startsWith(machine.modelsPath), true);
+    for (const [file, bytes] of hub.files)
+      assert.deepEqual(
+        await readFile(join(directory, file.slice("v1/".length))),
+        bytes,
+      );
+    assert.deepEqual(progress.at(-1), {
+      received: progress.at(-1)?.total,
+      total: [...hub.files.values()].reduce((sum, b) => sum + b.length, 0),
+    });
+    assert.deepEqual(await readdir(machine.modelsPath), [
+      directory.slice(machine.modelsPath.length + 1),
+    ]);
+    const count = hub.requests.length;
+    assert.equal(
+      await downloadRemoteFoundryModel(
+        machine,
+        asset,
+        signal,
+        undefined,
+        hub.fetch,
+      ),
+      directory,
+    );
+    assert.equal(hub.requests.length, count);
+  },
+);
+
+test("Foundry Local retries network failures and reports their cause", async (t) => {
+  const hub = await foundryServer(t);
+  let failures = 1;
+  const flaky: typeof fetch = (input, init) => {
+    if (failures-- > 0)
+      return Promise.reject(
+        new TypeError("fetch failed", {
+          cause: Object.assign(new Error("connect ECONNRESET 1.2.3.4:443"), {
+            code: "ECONNRESET",
+          }),
+        }),
+      );
+    return hub.fetch(input, init);
+  };
+  assert.equal(
+    (await listFoundryModels("cpu", { fetch: flaky })).models.length > 0,
+    true,
+  );
+  failures = 3;
+  await assert.rejects(
+    listFoundryModels("cpu", { fetch: flaky }),
+    /request to api\.catalog\.azureml\.ms failed after 3 attempts: fetch failed: ECONNRESET: connect ECONNRESET/,
+  );
 });

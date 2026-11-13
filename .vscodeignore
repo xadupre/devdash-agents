@@ -6,6 +6,10 @@ test/**
 scripts/**
 docs/**
 native/**
+!native/CMakeLists.txt
+!native/setup-worker.sh
+!native/src/*.cpp
+!native/src/*.h
 build/**
 .venv/**
 start.sh

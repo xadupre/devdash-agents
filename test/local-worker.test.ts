@@ -460,3 +460,23 @@ test("rejects oversized requests before writing them", async (t) => {
   );
   assert.equal((await client.discover()).length, 1);
 });
+
+test("a CUDA-pinned worker loads device 0 and reports its real device", async () => {
+  const unpinned = worker("cuda-device-0");
+  await assert.rejects(unpinned.load("model", "cuda", 7), /device_id 0/);
+  await unpinned.stop();
+  const pinned = new LocalWorker(
+    process.execPath,
+    [join(__dirname, "fixtures", "local-worker.js"), "cuda-device-0"],
+    5000,
+    undefined,
+    false,
+    { cudaDevice: 7, environment: { CUDA_VISIBLE_DEVICES: "7" } },
+  );
+  assert.deepEqual(await pinned.load("model", "cuda", 7), {
+    provider: "cuda",
+    deviceId: 7,
+    name: "GPU 7",
+  });
+  await pinned.stop();
+});

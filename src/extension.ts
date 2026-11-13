@@ -5,6 +5,7 @@ import {
   parseApplicationMessage,
   type LocalSessionSetup,
 } from "./application";
+import { CopilotWorkerMonitor, stopCopilotWorker } from "./copilot-workers";
 import { CopilotConversation } from "./conversation";
 import {
   ConversationRenderer,
@@ -20,6 +21,7 @@ import {
   listCopilotModels,
   listCopilotSessions,
   requestTimeoutMs,
+  type CopilotOptions,
 } from "./copilot";
 import { generatePostMortem, postMortemResponseSchema } from "./postmortem";
 import { exportSessionJson } from "./session-export";
@@ -39,18 +41,29 @@ import {
 import type { SettingsLoadStatus, SettingsState } from "./settings";
 import {
   downloadFoundryModel,
+  type DownloadProgress,
+  listFoundryModels as listFoundryCatalogue,
   localFoundryModels,
   type FoundryCatalog,
   type FoundryDevice,
 } from "./foundry";
-import { reconcileApprovedUrlOrigins } from "./settings";
+import {
+  MAX_WORKER_IDLE_MINUTES,
+  reconcileApprovedUrlOrigins,
+} from "./settings";
 import { LocalConversation } from "./local-conversation";
 import {
   findLocalModelHost,
   LocalModelHost,
   type LocalPlacement,
 } from "./local-model-host";
-import { MemoryMonitor } from "./system-memory";
+import {
+  MemoryMonitor,
+  currentMemorySample,
+  remoteMemory,
+  type MemoryUpdate,
+} from "./system-memory";
+import { ensureRemoteWorker } from "./remote-worker";
 import {
   inspectRemoteModel,
   parseRemoteMachines,
@@ -60,7 +73,20 @@ import {
 } from "./remote";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
+import {
+  assignSession,
+  machineModelSource,
+  machineRepositoryPath,
+  parseExecutionConfiguration,
+  type ExecutionConfiguration,
+  type MachineConfiguration,
+  type SessionAssignment,
+} from "./execution";
+import {
+  downloadRemoteFoundryModel,
+  prepareRemoteModel,
+} from "./remote-model-source";
 
 let activePanel: vscode.WebviewPanel | undefined;
 let closeActiveApplication: (() => Promise<void>) | undefined;
@@ -121,6 +147,164 @@ export function activate(context: vscode.ExtensionContext): void {
           .getConfiguration("devdashAgents")
           .get("requestTimeoutMinutes"),
       );
+    const workerIdleMinutes = (): number => {
+      const minutes = vscode.workspace
+        .getConfiguration("devdashAgents")
+        .get<number>("workerIdleMinutes", 30);
+      return Number.isSafeInteger(minutes) &&
+        minutes >= 0 &&
+        minutes <= MAX_WORKER_IDLE_MINUTES
+        ? minutes
+        : 30;
+    };
+    const executionConfiguration = (): ExecutionConfiguration => {
+      const settings = configuration();
+      const configured = settings.get<unknown>("execution");
+      if (configured !== undefined && configured !== null)
+        return parseExecutionConfiguration(configured);
+      const remotes = parseRemoteMachines(
+        settings.get<unknown>("remoteMachines", []),
+      );
+      const machines: MachineConfiguration[] = [
+        {
+          id: "local",
+          name: "This computer",
+          command: "",
+          repositoriesPath: root.fsPath,
+          modelsPath: join(context.globalStorageUri.fsPath, "models"),
+          workerPath: settings.get<string>("localWorkerPath", DEFAULT_WORKER),
+          cliPath: settings.get<string>("cliPath", "copilot"),
+        },
+        ...remotes.map((machine, index) => ({
+          id: `remote-${index}`,
+          name: machine.name,
+          command: machine.command,
+          repositoriesPath: machine.repositoriesPath,
+          modelsPath: posix.dirname(machine.modelPath),
+          workerPath: machine.workerPath,
+          cliPath: "copilot",
+        })),
+      ];
+      const workers: ExecutionConfiguration["workers"] = machines.map(
+        (machine) => ({
+          id: `copilot-${machine.id}`,
+          name: `Copilot @ ${machine.name}`,
+          backend: "copilot",
+          machineId: machine.id,
+          model: { kind: "copilot", source: currentModel() },
+          provider: "cpu",
+          deviceId: 0,
+        }),
+      );
+      const localSource = settings.get<string>("localModelPath", "");
+      for (const [index, machine] of machines.entries()) {
+        const source =
+          index === 0 ? localSource : remotes[index - 1]!.modelPath;
+        if (!source) continue;
+        workers.push({
+          id: `model-${machine.id}`,
+          name: `Model @ ${machine.name}`,
+          backend: "local",
+          machineId: machine.id,
+          model: {
+            kind: isTransformersModelId(source) ? "model-id" : "checkpoint",
+            source,
+          },
+          provider:
+            settings.get<string>("localProvider") === "cuda" ? "cuda" : "cpu",
+          deviceId: Math.max(0, settings.get<number>("localDeviceId", 0)),
+        });
+      }
+      return parseExecutionConfiguration({ machines, workers });
+    };
+    const asRemote = (
+      machine: MachineConfiguration,
+      modelPath = machine.modelsPath,
+    ): RemoteMachine | undefined =>
+      machine.command
+        ? {
+            name: machine.id,
+            command: machine.command,
+            workerPath: machine.workerPath,
+            modelPath,
+            repositoriesPath: machine.repositoriesPath,
+          }
+        : undefined;
+    const assignmentRequests = new Map<
+      string,
+      (
+        choice:
+          | {
+              workerId: string;
+              workerMachineId: string;
+              executionMachineId: string;
+            }
+          | undefined,
+      ) => void
+    >();
+    /** Asks the webview's session dialog for a worker, worker machine and harness machine. */
+    const chooseAssignment = async (
+      backend: "copilot" | "local" | undefined,
+      repositoryId: string,
+    ): Promise<SessionAssignment | undefined> => {
+      const config = executionConfiguration();
+      if (
+        !config.workers.some((worker) => !backend || worker.backend === backend)
+      )
+        throw new Error(
+          `Add a ${backend === "local" ? "local model " : backend === "copilot" ? "Copilot " : ""}worker in Settings > Workers before opening a session.`,
+        );
+      if (!panel) return undefined;
+      const requestId = randomUUID();
+      const choice = await new Promise<
+        Parameters<NonNullable<ReturnType<typeof assignmentRequests.get>>>[0]
+      >((resolve) => {
+        assignmentRequests.set(requestId, resolve);
+        void panel?.webview.postMessage({
+          type: "choose-assignment",
+          requestId,
+          repositoryId,
+          ...(backend ? { backend } : {}),
+        });
+      });
+      assignmentRequests.delete(requestId);
+      if (!choice) return undefined;
+      return assignSession(
+        executionConfiguration(),
+        choice.workerId,
+        choice.executionMachineId,
+        choice.workerMachineId,
+      );
+    };
+    const copilotOptions = (
+      repositoryPath: string,
+      assignment?: SessionAssignment,
+    ): Pick<
+      CopilotOptions,
+      "cliPath" | "model" | "workingDirectory" | "remote"
+    > => {
+      const machine = assignment?.executionMachine;
+      return {
+        cliPath:
+          machine?.cliPath ?? configuration().get<string>("cliPath", "copilot"),
+        model: assignment?.worker.model.source ?? currentModel(),
+        workingDirectory:
+          machine && !machine.command
+            ? machineRepositoryPath(machine, repositoryPath)
+            : repositoryPath,
+        ...(machine?.command
+          ? {
+              remote: {
+                command: machine.command,
+                workingDirectory: machineRepositoryPath(
+                  machine,
+                  repositoryPath,
+                ),
+              },
+            }
+          : {}),
+      };
+    };
     const storage = new ApplicationStorage(homedir(), root.fsPath);
     const saved = await storage.load();
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -131,6 +315,11 @@ export function activate(context: vscode.ExtensionContext): void {
     const initialPlacements = new WeakMap<LocalModelHost, LocalPlacement>();
     // Hosts are shared only between sessions targeting the same machine.
     const hostMachines = new WeakMap<LocalModelHost, string>();
+    const hostWorkers = new WeakMap<LocalModelHost, string>();
+    const hostAssignments = new WeakMap<
+      LocalModelHost,
+      Pick<SessionAssignment, "worker" | "workerMachine">
+    >();
     const localModelInfo = new Map<
       string,
       Awaited<ReturnType<typeof inspectLocalModel>>
@@ -160,11 +349,9 @@ export function activate(context: vscode.ExtensionContext): void {
     };
     const application: AgentApplication = new AgentApplication(
       root.fsPath,
-      (repository, requestId, view) =>
+      (repository, requestId, view, assignment) =>
         new CopilotConversation({
-          cliPath: configuration().get<string>("cliPath", "copilot"),
-          model: currentModel(),
-          workingDirectory: repository.path,
+          ...copilotOptions(repository.path, assignment),
           get timeoutMs() {
             return requestTimeout();
           },
@@ -232,6 +419,33 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       })());
     let panel: vscode.WebviewPanel | undefined;
+    const copilotMonitor = new CopilotWorkerMonitor();
+    const copilotWorkers = (state = application.getState()) =>
+      copilotMonitor.snapshots(state, workerIdleMinutes() * 60_000);
+    const stopCopilotGroup = (groupId: string, idleOnly = false) =>
+      stopCopilotWorker(
+        groupId,
+        idleOnly,
+        () => copilotWorkers(),
+        (id, view) => application.closeSession(id, view),
+        (row) =>
+          logEvent(
+            `${row.workerName} @ ${row.machineName}`,
+            idleOnly
+              ? `Idle for ${workerIdleMinutes()} min; closing ${row.sessions.length} Copilot session(s) to free memory.`
+              : `Stop requested; closing ${row.sessions.length} Copilot session(s).`,
+          ),
+      );
+    const copilotIdleTimer = setInterval(() => {
+      if (stopping) return;
+      for (const row of copilotWorkers())
+        if (row.idleStopAt !== undefined && row.idleStopAt <= Date.now())
+          void stopCopilotGroup(row.groupId, true).catch(report);
+    }, 30_000);
+    copilotIdleTimer.unref?.();
+    lifetime.signal.addEventListener("abort", () =>
+      clearInterval(copilotIdleTimer),
+    );
     const publish = (): void => {
       clearTimeout(publishTimer);
       publishTimer = undefined;
@@ -253,10 +467,21 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       void panel.webview.postMessage({
         type: "local-models",
-        models: [...localHosts].map(([id, host]) => ({
-          ...host.snapshot(),
-          id,
-        })),
+        models: [...localHosts].map(([id, host]) => {
+          const assignment = hostAssignments.get(host);
+          const machine = hostMachines.get(host) ?? "";
+          return {
+            ...host.snapshot(),
+            id,
+            ...(assignment ? { workerName: assignment.worker.name } : {}),
+            machineName:
+              assignment?.workerMachine.name ?? (machine || "This computer"),
+          };
+        }),
+      });
+      void panel.webview.postMessage({
+        type: "copilot-workers",
+        workers: copilotWorkers(state),
       });
     };
     await application.refresh();
@@ -280,11 +505,56 @@ export function activate(context: vscode.ExtensionContext): void {
     closeActiveApplication = close;
     const currentPanel = panel;
     const memoryMonitor = new MemoryMonitor();
+    const remoteMemorySamples = new Map<
+      string,
+      { at: number; sample: Promise<MemoryUpdate> }
+    >();
+    const sampleMemory = (
+      assignment: SessionAssignment | undefined,
+    ): Promise<MemoryUpdate> => {
+      const machine = assignment?.workerMachine;
+      const deviceId =
+        assignment?.worker.provider === "cuda"
+          ? assignment.worker.deviceId
+          : undefined;
+      const withDevice = (update: MemoryUpdate): MemoryUpdate =>
+        machine?.command || deviceId !== undefined
+          ? {
+              ...update,
+              ...(machine?.command ? { machine: machine.name } : {}),
+              ...(deviceId === undefined ? {} : { deviceId }),
+            }
+          : update;
+      if (!machine?.command) return memoryMonitor.sample().then(withDevice);
+      // Each sample opens a connection, so remote machines are sampled less often.
+      const cached = remoteMemorySamples.get(machine.command);
+      if (cached && Date.now() - cached.at < 30_000)
+        return cached.sample.then(withDevice);
+      const sample = remoteMemory(
+        { command: machine.command, name: machine.name },
+        lifetime.signal,
+      );
+      remoteMemorySamples.set(machine.command, { at: Date.now(), sample });
+      return sample.then(withDevice);
+    };
+    let memorySequence = 0;
     const publishMemory = (): void => {
       if (!panel?.visible || stopping) return;
-      void memoryMonitor.sample().then(
-        (update) => panel && void panel.webview.postMessage(update),
-        () => undefined,
+      const sequence = ++memorySequence;
+      void currentMemorySample(
+        () => application.activeAssignment(),
+        sampleMemory,
+      ).then(
+        (update) => {
+          if (
+            update &&
+            sequence === memorySequence &&
+            panel?.visible &&
+            !stopping
+          )
+            void panel.webview.postMessage(update);
+        },
+        (error: unknown) => report(error),
       );
     };
     const memoryTimer = setInterval(publishMemory, 5000);
@@ -368,6 +638,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const settings = vscode.workspace.getConfiguration("devdashAgents");
       const update: SettingsState = {
         type: "settings-state",
+        execution: executionConfiguration(),
         cliPath: settings.get<string>("cliPath", "copilot"),
         localWorkerPath: settings.get<string>(
           "localWorkerPath",
@@ -377,6 +648,7 @@ export function activate(context: vscode.ExtensionContext): void {
           "requestTimeoutMinutes",
           60,
         ),
+        workerIdleMinutes: workerIdleMinutes(),
         approvedUrlOrigins: settings.get<string[]>("approvedUrlOrigins", []),
         copilotModel: currentModel(),
         copilotModels,
@@ -427,10 +699,44 @@ export function activate(context: vscode.ExtensionContext): void {
           publishSettings();
         }
       })());
-    const prepareWorker = async (): Promise<string> => {
-      const configuredWorker = vscode.workspace
-        .getConfiguration("devdashAgents")
-        .get<string>("localWorkerPath", DEFAULT_WORKER);
+    const logEvent = (
+      source: string,
+      message: string,
+      level: "info" | "error" = "info",
+    ): void => {
+      output.appendLine(`[${source}] ${message}`);
+      application.logEvent(source, message, level);
+    };
+    /** Logs the start, duration and outcome of a long-running step. */
+    const logStep = async <T>(
+      source: string,
+      label: string,
+      run: () => Promise<T>,
+    ): Promise<T> => {
+      const started = Date.now();
+      logEvent(source, `${label}...`);
+      try {
+        const result = await run();
+        logEvent(
+          source,
+          `${label}: done in ${((Date.now() - started) / 1000).toFixed(1)} s.`,
+        );
+        return result;
+      } catch (error) {
+        logEvent(
+          source,
+          `${label}: failed after ${((Date.now() - started) / 1000).toFixed(1)} s: ${error instanceof Error ? error.message : String(error)}`,
+          "error",
+        );
+        throw error;
+      }
+    };
+    const prepareWorker = async (override?: string): Promise<string> => {
+      const configuredWorker =
+        override ??
+        vscode.workspace
+          .getConfiguration("devdashAgents")
+          .get<string>("localWorkerPath", DEFAULT_WORKER);
       let executable = resolveWorkerExecutable(
         configuredWorker,
         context.extensionPath,
@@ -460,10 +766,15 @@ export function activate(context: vscode.ExtensionContext): void {
               controller.abort(),
             );
             try {
-              await installEngine(
-                setupScript,
-                [],
-                AbortSignal.any([controller.signal, lifetime.signal]),
+              await logStep(
+                "this computer",
+                "Installing the local model engine",
+                () =>
+                  installEngine(
+                    setupScript,
+                    [],
+                    AbortSignal.any([controller.signal, lifetime.signal]),
+                  ),
               );
             } finally {
               subscription.dispose();
@@ -482,29 +793,116 @@ export function activate(context: vscode.ExtensionContext): void {
       machine: string;
       executable: string;
       args: string[];
+      /** Worker path on the remote machine, to relaunch it with other variables. */
+      remote?: { machine: RemoteMachine; executable: string };
+      workerId?: string;
+      assignment?: Pick<SessionAssignment, "worker" | "workerMachine">;
     }
+    const remoteWorkers = new Map<string, Promise<string>>();
     const workerLaunch = async (
       remote: RemoteMachine | undefined,
     ): Promise<WorkerLaunch> => {
       if (!remote)
         return { machine: "", executable: await prepareWorker(), args: [] };
+      const key = JSON.stringify([remote.command, remote.workerPath]);
+      let executable = remoteWorkers.get(key);
+      if (!executable) {
+        executable = Promise.resolve(
+          vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: `Native worker on ${remote.name}`,
+              cancellable: true,
+            },
+            async (progress, token) => {
+              const controller = new AbortController();
+              const subscription = token.onCancellationRequested(() =>
+                controller.abort(),
+              );
+              try {
+                progress.report({ message: "looking for the worker..." });
+                return await logStep(
+                  remote.name,
+                  "Looking for the native worker",
+                  () =>
+                    ensureRemoteWorker(remote, {
+                      nativeDirectory: join(context.extensionPath, "native"),
+                      signal: AbortSignal.any([
+                        controller.signal,
+                        lifetime.signal,
+                      ]),
+                      onInstall: () => {
+                        logEvent(
+                          remote.name,
+                          "Native worker not found; building it on the remote machine (first use, several minutes)...",
+                        );
+                        progress.report({
+                          message:
+                            "building it on the remote machine (first use, several minutes)...",
+                        });
+                      },
+                    }),
+                );
+              } finally {
+                subscription.dispose();
+              }
+            },
+          ),
+        );
+        remoteWorkers.set(key, executable);
+        executable.catch(() => {
+          if (remoteWorkers.get(key) === executable) remoteWorkers.delete(key);
+        });
+      }
+      const remoteExecutable = await executable;
       return {
         machine: remote.name,
-        ...remoteInvocation(remote, [remote.workerPath]),
+        ...remoteInvocation(remote, [remoteExecutable]),
+        remote: { machine: remote, executable: remoteExecutable },
       };
     };
     const startWorker = (
       launch: WorkerLaunch,
       timeoutMs?: number,
       onClose?: (error: Error) => void,
-    ): LocalWorker =>
-      new LocalWorker(
-        launch.executable,
-        launch.args,
+      placement?: LocalPlacement,
+    ): LocalWorker => {
+      // Some GenAI models (runtime_profiles) only load on CUDA device 0, so
+      // each model process sees only its GPU.
+      const cudaDevice =
+        placement?.provider === "cuda" && placement.deviceId >= 0
+          ? placement.deviceId
+          : undefined;
+      if (cudaDevice === undefined)
+        return new LocalWorker(
+          launch.executable,
+          launch.args,
+          timeoutMs,
+          onClose,
+          launch.machine !== "",
+        );
+      const visible = `CUDA_VISIBLE_DEVICES=${cudaDevice}`;
+      const { executable, args } = launch.remote
+        ? remoteInvocation(launch.remote.machine, [
+            "env",
+            visible,
+            launch.remote.executable,
+          ])
+        : launch;
+      return new LocalWorker(
+        executable,
+        args,
         timeoutMs,
         onClose,
         launch.machine !== "",
+        launch.remote
+          ? { cudaDevice }
+          : {
+              cudaDevice,
+              environment: { CUDA_VISIBLE_DEVICES: String(cudaDevice) },
+            },
       );
+    };
     const getLocalModelHost = (
       modelPath: string,
       launch: WorkerLaunch,
@@ -513,9 +911,17 @@ export function activate(context: vscode.ExtensionContext): void {
       modelInfo: LocalModelInfo,
     ): LocalModelHost => {
       const desired = { provider, deviceId };
+      if (launch.workerId) {
+        const shared = [...localHosts.values()].find(
+          (host) => hostWorkers.get(host) === launch.workerId,
+        );
+        if (shared) return shared;
+      }
       const existing = findLocalModelHost(
         [...localHosts.values()].filter(
-          (host) => (hostMachines.get(host) ?? "") === launch.machine,
+          (host) =>
+            (hostMachines.get(host) ?? "") === launch.machine &&
+            (hostWorkers.get(host) ?? "") === (launch.workerId ?? ""),
         ),
         modelPath,
         desired,
@@ -526,7 +932,8 @@ export function activate(context: vscode.ExtensionContext): void {
       const host = new LocalModelHost(
         modelPath,
         desired,
-        (onClose) => startWorker(launch, requestTimeout(), onClose),
+        (onClose, placement) =>
+          startWorker(launch, requestTimeout(), onClose, placement),
         publish,
         () => {
           if (localHosts.get(hostId) === host) localHosts.delete(hostId);
@@ -539,9 +946,13 @@ export function activate(context: vscode.ExtensionContext): void {
           bytesPerToken: modelInfo.bytesPerToken,
           sharedBuffer: modelInfo.sharedBuffer,
         },
+        () => workerIdleMinutes() * 60_000,
+        (message, level) => logEvent(modelInfo.name, message, level),
       );
       localHosts.set(hostId, host);
       hostMachines.set(host, launch.machine);
+      if (launch.workerId) hostWorkers.set(host, launch.workerId);
+      if (launch.assignment) hostAssignments.set(host, launch.assignment);
       initialPlacements.set(host, { provider, deviceId });
       return host;
     };
@@ -551,38 +962,134 @@ export function activate(context: vscode.ExtensionContext): void {
       deviceId: number,
     ): Promise<{ provider: LocalProvider; deviceId: number }> => {
       if (provider !== "auto" && deviceId >= 0) return { provider, deviceId };
-      const discovery = startWorker(launch, requestTimeout());
-      try {
-        const devices = await discovery.discover(
-          AbortSignal.any([
-            lifetime.signal,
-            AbortSignal.timeout(DEVICE_DISCOVERY_TIMEOUT_MS),
-          ]),
-        );
-        const device = resolveLocalDevice(devices, provider, deviceId);
-        return { provider: device.provider, deviceId: device.deviceId };
-      } finally {
-        await discovery.stop();
-      }
+      return logStep(
+        launch.machine || "this computer",
+        "Discovering CPU and CUDA devices",
+        async () => {
+          const discovery = startWorker(launch, requestTimeout());
+          try {
+            const devices = await discovery.discover(
+              AbortSignal.any([
+                lifetime.signal,
+                AbortSignal.timeout(DEVICE_DISCOVERY_TIMEOUT_MS),
+              ]),
+            );
+            const device = resolveLocalDevice(devices, provider, deviceId);
+            logEvent(
+              launch.machine || "this computer",
+              `Selected ${device.provider.toUpperCase()} ${device.deviceId} (${device.name}).`,
+            );
+            return { provider: device.provider, deviceId: device.deviceId };
+          } finally {
+            await discovery.stop();
+          }
+        },
+      );
+    };
+    const preparedWorkerSources = new Map<string, Promise<string>>();
+    const prepareWorkerSource = (
+      assignment: SessionAssignment,
+    ): Promise<string> => {
+      const { worker, workerMachine } = assignment;
+      const key = JSON.stringify([worker, workerMachine]);
+      const existing = preparedWorkerSources.get(key);
+      if (existing) return existing;
+      const prepare = async (): Promise<string> => {
+        const source = worker.name;
+        if (worker.model.kind === "foundry") {
+          let reportedPercent = -5;
+          let reportedAt = Date.now();
+          const onProgress = ({ received, total }: DownloadProgress): void => {
+            if (!(total > 0)) return;
+            const percent = Math.floor((received / total) * 20) * 5;
+            if (percent <= reportedPercent && Date.now() - reportedAt < 60_000)
+              return;
+            reportedPercent = Math.max(percent, reportedPercent);
+            reportedAt = Date.now();
+            logEvent(
+              source,
+              `Downloaded ${(received / 1024 ** 3).toFixed(2)} of ${(total / 1024 ** 3).toFixed(2)} GB (${percent}%).`,
+            );
+          };
+          return workerMachine.command
+            ? logStep(
+                source,
+                `Downloading Foundry model ${worker.model.source} on ${workerMachine.name}`,
+                () =>
+                  downloadRemoteFoundryModel(
+                    workerMachine,
+                    worker.model.source,
+                    lifetime.signal,
+                    onProgress,
+                  ),
+              )
+            : logStep(
+                source,
+                `Downloading Foundry model ${worker.model.source} on this computer`,
+                () =>
+                  downloadFoundryModel(
+                    worker.model.source,
+                    workerMachine.modelsPath,
+                    { signal: lifetime.signal },
+                    onProgress,
+                  ),
+              );
+        }
+        const model =
+          worker.model.kind === "model-id"
+            ? worker.model.source
+            : machineModelSource(workerMachine, worker.model.source);
+        return workerMachine.command
+          ? logStep(
+              source,
+              `Preparing model ${model} on ${workerMachine.name}`,
+              () =>
+                prepareRemoteModel(
+                  workerMachine,
+                  worker,
+                  model,
+                  lifetime.signal,
+                ),
+            )
+          : Promise.resolve(model);
+      };
+      const result = prepare().catch((error) => {
+        if (preparedWorkerSources.get(key) === result)
+          preparedWorkerSources.delete(key);
+        throw error;
+      });
+      preparedWorkerSources.set(key, result);
+      return result;
     };
     const createLocalSessionSetup = (
       id: string,
       repositoryPath: string,
+      assignment?: SessionAssignment,
     ): LocalSessionSetup => {
-      const remote = configuredRemoteMachine();
-      const configuredPath = remote
-        ? remote.modelPath
-        : vscode.workspace
-            .getConfiguration("devdashAgents")
-            .get<string>("localModelPath", "");
+      const remote = assignment
+        ? asRemote(assignment.workerMachine)
+        : configuredRemoteMachine();
+      const configuredPath = assignment
+        ? assignment.worker.model.source
+        : remote
+          ? remote.modelPath
+          : vscode.workspace
+              .getConfiguration("devdashAgents")
+              .get<string>("localModelPath", "");
       if (!configuredPath)
         throw new Error(
           "Choose a local model in Settings before opening a local session.",
         );
-      const toolRepositoryPath = remote
-        ? remoteRepositoryPath(remote, repositoryPath)
-        : repositoryPath;
-      const { provider, deviceId } = configuredLocalDevice();
+      const toolRemote = assignment
+        ? asRemote(assignment.executionMachine)
+        : remote;
+      const toolRepositoryPath = assignment
+        ? machineRepositoryPath(assignment.executionMachine, repositoryPath)
+        : remote
+          ? remoteRepositoryPath(remote, repositoryPath)
+          : repositoryPath;
+      const { provider, deviceId } =
+        assignment?.worker ?? configuredLocalDevice();
       let modelPath!: string;
       let modelInfo!: LocalModelInfo;
       let launch!: WorkerLaunch;
@@ -591,6 +1098,7 @@ export function activate(context: vscode.ExtensionContext): void {
         deviceId,
       };
       return {
+        assignment,
         create: (localSessionId) => {
           if (!localSessionId)
             throw new Error("Missing local session identity.");
@@ -608,7 +1116,7 @@ export function activate(context: vscode.ExtensionContext): void {
             placement.deviceId >= 0 ? placement.deviceId : undefined,
             {
               repositoryPath: toolRepositoryPath,
-              ...(remote ? { remote } : {}),
+              ...(toolRemote ? { remote: toolRemote } : {}),
               canEdit: () =>
                 application.canEditLocalSession(id, localSessionId),
               requestPermission: (description) =>
@@ -623,8 +1131,19 @@ export function activate(context: vscode.ExtensionContext): void {
           );
         },
         prepare: async () => {
+          const selectedPath = assignment
+            ? await prepareWorkerSource(assignment)
+            : configuredPath;
           if (remote) {
-            const inspected = await inspectRemoteModel(remote, lifetime.signal);
+            const inspected = await logStep(
+              remote.name,
+              `Inspecting model ${selectedPath}`,
+              () =>
+                inspectRemoteModel(
+                  { ...remote, modelPath: selectedPath },
+                  lifetime.signal,
+                ),
+            );
             modelPath = inspected.directory;
             modelInfo = {
               ...inspected.info,
@@ -632,11 +1151,34 @@ export function activate(context: vscode.ExtensionContext): void {
             };
             launch = await workerLaunch(remote);
           } else {
-            modelPath = await prepareModel(configuredPath, provider);
-            launch = await workerLaunch(undefined);
+            modelPath = await prepareModel(
+              selectedPath,
+              provider,
+              false,
+              assignment?.workerMachine.modelsPath,
+            );
+            launch = assignment
+              ? {
+                  machine: "",
+                  executable: await prepareWorker(
+                    assignment.workerMachine.workerPath,
+                  ),
+                  args: [],
+                }
+              : await workerLaunch(undefined);
             const cached = localModelInfo.get(modelPath);
             modelInfo = cached ?? (await inspectLocalModel(modelPath));
             localModelInfo.set(modelPath, modelInfo);
+          }
+          if (assignment) {
+            launch.workerId = JSON.stringify([
+              assignment.worker,
+              assignment.workerMachine,
+            ]);
+            launch.assignment = {
+              worker: assignment.worker,
+              workerMachine: assignment.workerMachine,
+            };
           }
           if (stopping || !panel)
             throw new Error("The application is closing.");
@@ -656,6 +1198,7 @@ export function activate(context: vscode.ExtensionContext): void {
       source: string,
       provider = configuredLocalDevice().provider,
       refresh = false,
+      storageDirectory = join(context.globalStorageUri.fsPath, "models"),
     ): Promise<string> => {
       const targetProvider =
         provider === "auto" &&
@@ -669,7 +1212,7 @@ export function activate(context: vscode.ExtensionContext): void {
               )
             ).provider
           : provider;
-      const key = JSON.stringify([source, targetProvider]);
+      const key = JSON.stringify([source, targetProvider, storageDirectory]);
       const existing = preparedModels.get(key);
       if (existing && !refresh) return existing;
       const preparing = vscode.window.withProgress(
@@ -684,13 +1227,14 @@ export function activate(context: vscode.ExtensionContext): void {
             controller.abort(),
           );
           try {
-            return await prepareLocalModel(
-              source,
-              join(context.globalStorageUri.fsPath, "models"),
-              {
-                provider: targetProvider,
-                signal: AbortSignal.any([controller.signal, lifetime.signal]),
-              },
+            return await logStep(
+              "this computer",
+              `Preparing local model ${source} for ${targetProvider.toUpperCase()}`,
+              () =>
+                prepareLocalModel(source, storageDirectory, {
+                  provider: targetProvider,
+                  signal: AbortSignal.any([controller.signal, lifetime.signal]),
+                }),
             );
           } finally {
             subscription.dispose();
@@ -863,9 +1407,11 @@ export function activate(context: vscode.ExtensionContext): void {
             "cliPath",
             "localWorkerPath",
             "requestTimeoutMinutes",
+            "workerIdleMinutes",
             "approvedUrlOrigins",
             "remoteMachines",
             "remoteMachine",
+            "execution",
           ].some((key) => event.affectsConfiguration(`devdashAgents.${key}`))
         ) {
           if (
@@ -877,6 +1423,10 @@ export function activate(context: vscode.ExtensionContext): void {
             localDevicesStatus = "idle";
             localDevicesError = undefined;
           }
+          if (event.affectsConfiguration("devdashAgents.workerIdleMinutes")) {
+            for (const host of localHosts.values()) host.refreshIdleTimeout();
+            publish();
+          }
           publishSettings();
         }
       },
@@ -885,6 +1435,7 @@ export function activate(context: vscode.ExtensionContext): void {
       async (value: unknown) => {
         let repositoryId: string | undefined;
         let harnessSettingsRequestId: number | undefined;
+        let executionConfigurationRequestId: string | undefined;
         const datasetAction =
           value !== null &&
           typeof value === "object" &&
@@ -907,6 +1458,17 @@ export function activate(context: vscode.ExtensionContext): void {
           value.requestId > 0
         )
           harnessSettingsRequestId = value.requestId;
+        if (
+          value !== null &&
+          typeof value === "object" &&
+          "type" in value &&
+          value.type === "execution-configuration" &&
+          "requestId" in value &&
+          typeof value.requestId === "string" &&
+          value.requestId.length > 0 &&
+          value.requestId.length <= 100
+        )
+          executionConfigurationRequestId = value.requestId;
         try {
           const message = parseApplicationMessage(value);
           if (message.type === "github-comment") commentRequest = message;
@@ -952,6 +1514,33 @@ export function activate(context: vscode.ExtensionContext): void {
             case "foundry-models":
               await listFoundryModels(message.device);
               break;
+            case "worker-foundry-models": {
+              // Unfiltered: the worker machine may be remote, so local memory is irrelevant.
+              let result:
+                | { models: { id: string; name: string; size: number }[] }
+                | { error: string };
+              try {
+                const { models } = await listFoundryCatalogue(message.device, {
+                  signal: lifetime.signal,
+                });
+                result = {
+                  models: models.map(({ id, name, size }) => ({
+                    id,
+                    name,
+                    size,
+                  })),
+                };
+              } catch (error) {
+                result = { error: report(error) };
+              }
+              await panel?.webview.postMessage({
+                type: "worker-foundry-models",
+                requestId: message.requestId,
+                device: message.device,
+                ...result,
+              });
+              break;
+            }
             case "foundry-download":
               await downloadFoundry(message.id);
               break;
@@ -1025,6 +1614,7 @@ export function activate(context: vscode.ExtensionContext): void {
               if (!message.model) break;
               for (const repository of application.getState().repositories) {
                 if (
+                  application.getAssignment(repository.id) ||
                   repository.backend === "local" ||
                   !["ready", "busy"].includes(repository.status)
                 )
@@ -1109,6 +1699,38 @@ export function activate(context: vscode.ExtensionContext): void {
               }
               break;
             }
+            case "execution-configuration": {
+              const save = async (): Promise<void> => {
+                const settings = configuration();
+                await settings.update(
+                  "execution",
+                  message.configuration,
+                  vscode.ConfigurationTarget.Global,
+                );
+                if (settings.inspect("execution")?.workspaceValue !== undefined)
+                  await settings.update(
+                    "execution",
+                    message.configuration,
+                    vscode.ConfigurationTarget.Workspace,
+                  );
+                publishSettings();
+              };
+              savingConfiguration = savingConfiguration.then(save, save);
+              await savingConfiguration;
+              const saved = executionConfiguration();
+              if (
+                JSON.stringify(saved) !== JSON.stringify(message.configuration)
+              )
+                throw new Error(
+                  "Machine and worker settings are overridden by another VS Code configuration scope.",
+                );
+              await panel?.webview.postMessage({
+                type: "execution-configuration-saved",
+                requestId: message.requestId,
+                configuration: saved,
+              });
+              break;
+            }
             case "local-device": {
               const settings =
                 vscode.workspace.getConfiguration("devdashAgents");
@@ -1135,6 +1757,19 @@ export function activate(context: vscode.ExtensionContext): void {
                 message.view,
               );
               break;
+            case "stop-copilot-worker":
+              await stopCopilotGroup(message.groupId);
+              break;
+            case "stop-local-worker": {
+              const host = localHosts.get(message.hostId);
+              if (!host) throw new Error("The worker is no longer running.");
+              logEvent(
+                host.snapshot().name ?? host.modelPath,
+                "Stop requested.",
+              );
+              await host.stop();
+              break;
+            }
             case "local-placement": {
               const matches = [...localHosts.values()].filter(
                 (entry) => entry.modelPath === message.modelPath,
@@ -1148,7 +1783,14 @@ export function activate(context: vscode.ExtensionContext): void {
                 : matches[0];
               if (!host || host.modelPath !== message.modelPath)
                 throw new Error("The local model is not currently open.");
-              await host.place(message.placement, localHosts.values());
+              await host.place(
+                message.placement,
+                [...localHosts.values()].filter(
+                  (peer) =>
+                    hostMachines.get(peer) === hostMachines.get(host) &&
+                    hostWorkers.get(peer) === hostWorkers.get(host),
+                ),
+              );
               if (message.placement.provider !== "disk")
                 initialPlacements.set(host, message.placement);
               break;
@@ -1249,7 +1891,8 @@ export function activate(context: vscode.ExtensionContext): void {
                 message.view ?? "copilot",
               );
               break;
-            case "postmortem":
+            case "postmortem": {
+              const assignment = application.getAssignment(message.id);
               if (
                 application
                   .getState()
@@ -1267,12 +1910,7 @@ export function activate(context: vscode.ExtensionContext): void {
                     source,
                     (prompt, signal) =>
                       askCopilot(prompt, {
-                        cliPath: configuration().get<string>(
-                          "cliPath",
-                          "copilot",
-                        ),
-                        model: currentModel(),
-                        workingDirectory: source.repository.path,
+                        ...copilotOptions(source.repository.path, assignment),
                         signal,
                         timeoutMs: requestTimeout(),
                         analysisOnly: true,
@@ -1284,6 +1922,7 @@ export function activate(context: vscode.ExtensionContext): void {
               );
               await storage.save(application.getSnapshot());
               break;
+            }
             case "export-postmortem": {
               const json = application.exportPostMortem(message.id);
               const destination = await vscode.window.showSaveDialog({
@@ -1362,50 +2001,54 @@ export function activate(context: vscode.ExtensionContext): void {
                 .getState()
                 .repositories.find((entry) => entry.id === message.id);
               if (!repository) throw new Error("Unknown repository.");
+              const assignment =
+                application.getAssignment(message.id) ??
+                (await chooseAssignment(
+                  repository.backend ?? "copilot",
+                  message.id,
+                ));
+              if (!assignment) break;
               if (repository.backend === "local") {
                 const setup = createLocalSessionSetup(
                   message.id,
                   repository.path,
+                  assignment,
                 );
                 await application.openLocalSession(
                   message.id,
                   setup.create,
                   setup.prepare,
+                  false,
+                  assignment,
                 );
               } else {
-                await application.restart(message.id);
+                await application.restart(message.id, assignment);
               }
               break;
             }
-            case "open-session":
-              await application.openSession(message.id);
+            case "open-session": {
+              const existing = application.getAssignment(message.id, "copilot");
+              const assignment =
+                existing ?? (await chooseAssignment("copilot", message.id));
+              if (!assignment) break;
+              await application.openSession(
+                message.id,
+                existing ? undefined : assignment,
+              );
+              break;
+            }
+            case "assignment-choice":
+              assignmentRequests.get(message.requestId)?.(message.choice);
               break;
             case "select-session":
               application.selectSession(message.id, message.view);
+              publishMemory();
               break;
             case "add-session": {
-              const picked = await vscode.window.showQuickPick(
-                [
-                  {
-                    label: "Copilot",
-                    description: "Add an independent Copilot session",
-                    backend: "copilot" as const,
-                  },
-                  {
-                    label: "Local",
-                    description:
-                      "Use the model and device selected in Settings",
-                    backend: "local" as const,
-                  },
-                ],
-                {
-                  title: "Add session",
-                  placeHolder: "Choose the session type",
-                },
-              );
-              if (!picked) break;
-              if (picked.backend === "copilot")
-                await application.addCopilotSession(message.id);
+              const assignment = await chooseAssignment(undefined, message.id);
+              if (!assignment) break;
+              if (assignment.worker.backend === "copilot")
+                await application.addCopilotSession(message.id, assignment);
               else {
                 const repository = application
                   .getState()
@@ -1414,12 +2057,14 @@ export function activate(context: vscode.ExtensionContext): void {
                 const setup = createLocalSessionSetup(
                   message.id,
                   repository.path,
+                  assignment,
                 );
                 await application.openLocalSession(
                   message.id,
                   setup.create,
                   setup.prepare,
                   true,
+                  assignment,
                 );
               }
               break;
@@ -1450,15 +2095,24 @@ export function activate(context: vscode.ExtensionContext): void {
                 });
                 break;
               }
+              const existing =
+                message.type === "open-local-session" && repository.localSession
+                  ? application.getAssignment(message.id, "local")
+                  : undefined;
+              const assignment =
+                existing ?? (await chooseAssignment("local", message.id));
+              if (!assignment) break;
               const setup = createLocalSessionSetup(
                 message.id,
                 repository.path,
+                assignment,
               );
               await application.openLocalSession(
                 message.id,
                 setup.create,
                 setup.prepare,
                 message.type === "new-local-session",
+                setup.assignment,
               );
               break;
             }
@@ -1470,6 +2124,15 @@ export function activate(context: vscode.ExtensionContext): void {
                 .getState()
                 .repositories.find((entry) => entry.id === message.id);
               if (!repository) throw new Error("Unknown repository.");
+              const current = application.getAssignment(
+                message.id,
+                message.view,
+              );
+              const assignment =
+                current?.worker.backend === "copilot"
+                  ? current
+                  : await chooseAssignment("copilot", message.id);
+              if (!assignment) break;
               const sessions = await vscode.window.withProgress(
                 {
                   location: vscode.ProgressLocation.Notification,
@@ -1477,8 +2140,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 },
                 () =>
                   listCopilotSessions({
-                    cliPath: configuration().get<string>("cliPath", "copilot"),
-                    workingDirectory: repository.path,
+                    ...copilotOptions(repository.path, assignment),
                     timeoutMs: requestTimeout(),
                   }),
               );
@@ -1511,7 +2173,7 @@ export function activate(context: vscode.ExtensionContext): void {
               if (message.view)
                 application.selectSession(message.id, message.view);
               await application
-                .resumeSession(message.id, picked.sessionId)
+                .resumeSession(message.id, picked.sessionId, assignment)
                 .finally(() => storage.save(application.getSnapshot()));
               break;
             }
@@ -1527,13 +2189,24 @@ export function activate(context: vscode.ExtensionContext): void {
                 .getState()
                 .repositories.find((entry) => entry.id === message.id);
               if (!repository) throw new Error("Unknown repository.");
+              const assignment =
+                application.getAssignment(message.id) ??
+                (await chooseAssignment(
+                  repository.backend ?? "copilot",
+                  message.id,
+                ));
+              if (!assignment) break;
               const operation =
                 repository.backend === "local"
                   ? application.newSession(
                       message.id,
-                      createLocalSessionSetup(message.id, repository.path),
+                      createLocalSessionSetup(
+                        message.id,
+                        repository.path,
+                        assignment,
+                      ),
                     )
-                  : application.newSession(message.id);
+                  : application.newSession(message.id, undefined, assignment);
               await operation.finally(() =>
                 storage.save(application.getSnapshot()),
               );
@@ -1563,6 +2236,18 @@ export function activate(context: vscode.ExtensionContext): void {
               type: "harness-settings-result",
               requestId: harnessSettingsRequestId,
               error: message,
+            });
+          } else if (
+            panel &&
+            value !== null &&
+            typeof value === "object" &&
+            "type" in value &&
+            value.type === "execution-configuration"
+          ) {
+            await panel.webview.postMessage({
+              type: "execution-configuration-error",
+              requestId: executionConfigurationRequestId,
+              message,
             });
           } else if (panel && datasetAction) {
             await panel.webview.postMessage({
@@ -1599,6 +2284,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     panel.onDidDispose(() => {
       panel = undefined;
+      for (const resolve of assignmentRequests.values()) resolve(undefined);
       clearInterval(memoryTimer);
       visibilitySubscription.dispose();
       messageSubscription.dispose();

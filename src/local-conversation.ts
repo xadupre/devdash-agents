@@ -8,6 +8,7 @@ import type { Conversation } from "./conversation";
 import type { ImageAttachment } from "./images";
 import type { LocalModelInfo } from "./local-model";
 import { LocalResponse } from "./local-response";
+import { REMOTE_ERROR_PREFIX, remoteError, runRemoteScript } from "./remote";
 import type {
   ContextReductionMode,
   LocalChatMessage,
@@ -166,17 +167,42 @@ export class LocalConversation implements Conversation {
             message: `Local model directory size: ${(this.modelInfo.sizeBytes / 1024 ** 2).toFixed(2)} MiB (${this.modelInfo.sizeBytes} logical bytes, including weights and tokenizer). Context: ${this.modelInfo.contextLength} tokens; generation limit: ${Math.min(this.modelInfo.contextLength, 8192)} tokens including prompt.`,
           },
         });
-      const device: LocalDevice = await this.worker.load(
-        this.modelPath,
-        this.provider,
-        this.deviceId,
-        operationSignal,
-      );
-      operationSignal.throwIfAborted();
-      this.device = device;
-      this.ready = true;
       if (this.tools) {
-        const entries = await readdir(this.tools.repositoryPath);
+        let entries: string[];
+        if (this.tools.remote) {
+          this.emit({
+            type: "session.info",
+            data: {
+              infoType: "local",
+              message: `Checking repository ${this.tools.repositoryPath} on harness machine ${this.tools.remote.name}...`,
+            },
+          });
+          const result = await runRemoteScript(
+            this.tools.remote,
+            `cd -- "$1" || {
+  if [ -e "$1" ] || [ -L "$1" ]; then
+    if [ -d "$1" ]; then
+      reason="cannot be opened; check its permissions"
+    else
+      reason="exists but is not a directory"
+    fi
+  else
+    reason="does not exist or is inaccessible"
+  fi
+  printf '${REMOTE_ERROR_PREFIX}Cannot start the session: repository directory "%s" on harness machine "%s" %s. The harness runs repository commands and may differ from the worker machine; DevDash does not clone repositories automatically. Ensure a clone is accessible at this path, or in Settings > Machines select the harness machine and set "Repositories directory (absolute path)" to the parent folder of an existing clone. Save and create a new session, or choose another harness machine; the worker can stay unchanged.\\n' "$1" "$2" "$reason" >&2
+  exit 2
+}
+for entry in ./* ./.[!.]* ./..?*; do
+  [ -e "$entry" ] || [ -L "$entry" ] || continue
+  printf '%s\\0' "\${entry#./}"
+done`,
+            [this.tools.repositoryPath, this.tools.remote.name],
+            { signal: operationSignal },
+          );
+          if (!result.completed || result.code !== 0)
+            throw remoteError(result, "Listing the remote repository failed");
+          entries = result.stdout.toString("utf8").split("\0").filter(Boolean);
+        } else entries = await readdir(this.tools.repositoryPath);
         operationSignal.throwIfAborted();
         this.history.push({
           role: "system",
@@ -187,6 +213,15 @@ export class LocalConversation implements Conversation {
           ].join("\n"),
         });
       }
+      const device: LocalDevice = await this.worker.load(
+        this.modelPath,
+        this.provider,
+        this.deviceId,
+        operationSignal,
+      );
+      operationSignal.throwIfAborted();
+      this.device = device;
+      this.ready = true;
       this.emit({
         type: "session.info",
         data: {

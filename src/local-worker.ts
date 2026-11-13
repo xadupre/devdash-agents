@@ -252,6 +252,8 @@ export class LocalWorker {
    * @param onClose called once when the worker can no longer serve requests,
    * including after stop().
    */
+  private readonly cudaDevice?: number;
+
   constructor(
     executable: string,
     args: string[] = [],
@@ -259,12 +261,22 @@ export class LocalWorker {
     private readonly onClose?: (error: Error) => void,
     /** Runs the worker in its own process group, e.g. behind a remote connection command. */
     private readonly processGroup = false,
+    options: {
+      /** Extra variables for a local worker process. */
+      environment?: Record<string, string>;
+      /**
+       * The only CUDA device the process can see (via CUDA_VISIBLE_DEVICES,
+       * set by the caller). It loads as device 0 and is reported as this one.
+       */
+      cudaDevice?: number;
+    } = {},
   ) {
+    this.cudaDevice = options.cudaDevice;
     this.child = spawn(executable, args, {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       shell: false,
-      env: workerEnvironment(process.env),
+      env: workerEnvironment({ ...process.env, ...options.environment }),
       detached: processGroup && process.platform !== "win32",
     });
     this.child.stdout.setEncoding("utf8");
@@ -323,14 +335,23 @@ export class LocalWorker {
     deviceId?: number,
     signal?: AbortSignal,
   ): Promise<LocalDevice> {
+    const pinned = provider === "cuda" && this.cudaDevice !== undefined;
     const response = await this.request(
-      { method: "load", modelPath, provider, deviceId },
+      {
+        method: "load",
+        modelPath,
+        provider,
+        deviceId: pinned ? 0 : deviceId,
+      },
       "loaded",
       signal,
     );
     const device = {
       provider: response.provider,
-      deviceId: response.deviceId,
+      deviceId:
+        pinned && response.provider === "cuda" && response.deviceId === 0
+          ? this.cudaDevice
+          : response.deviceId,
       name:
         typeof response.name === "string" ? response.name : response.provider,
     };

@@ -9,7 +9,9 @@ import unittest
 import zipfile
 
 
-verify = runpy.run_path(str(Path(__file__).parents[1] / "verify-package.py"))["verify"]
+module = runpy.run_path(str(Path(__file__).parents[1] / "verify-package.py"))
+verify = module["verify"]
+verify_entries = module["verify_entries"]
 
 
 class PackageTests(unittest.TestCase):
@@ -35,7 +37,9 @@ class PackageTests(unittest.TestCase):
     def test_build_files_and_models_are_rejected(self):
         for name in (
             "extension/build/native/devdash-genai-worker",
-            "extension/native/src/worker.h",
+            "extension/native/src/worker.o",
+            "extension/native/src/onnxruntime_c_api.h",
+            "extension/native/build/libonnxruntime.so",
             "extension/models/model.onnx",
             "extension/models/genai_config.json",
         ):
@@ -43,6 +47,14 @@ class PackageTests(unittest.TestCase):
                 path = self.package(directory, {name: ""})
                 with self.assertRaisesRegex(ValueError, "leaked"):
                     verify(path)
+
+    def test_remote_build_sources_are_allowed(self):
+        native = Path(__file__).parents[1]
+        sources = [native / "CMakeLists.txt", native / "setup-worker.sh"]
+        sources += list((native / "src").glob("*.cpp"))
+        sources += list((native / "src").glob("*.h"))
+        names = ["extension/native/" + path.relative_to(native).as_posix() for path in sources]
+        self.assertEqual(verify_entries(names, ()), [])
 
     def test_unexpected_runtime_files_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

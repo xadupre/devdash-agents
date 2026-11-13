@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { Script } from "node:vm";
 import { JSDOM } from "jsdom";
-import type {
-  ApplicationMessage,
-  ApplicationState,
-  DatasetSession,
+import {
+  parseApplicationMessage,
+  type ApplicationMessage,
+  type ApplicationState,
+  type DatasetSession,
 } from "../src/application";
 import {
   ConversationRenderer,
@@ -778,6 +779,22 @@ test("the composer shows the active session model and free CPU/CUDA memory", asy
     "Free: CPU 12.3 GB · CUDA 0 7.8 GB · CUDA 1 20.0 GB",
   );
   assert.match(memory.title, /CUDA 1: 20\.0 GB free of 24\.0 GB/);
+  send({
+    type: "memory",
+    machine: "H200-101",
+    deviceId: 1,
+    cpu: { free: 12.34 * GiB, total: 32 * GiB },
+    cuda: [
+      { free: 0.1 * GiB, total: 8 * GiB },
+      { free: 20 * GiB, total: 24 * GiB },
+    ],
+  });
+  assert.equal(
+    memory.textContent,
+    "H200-101 free: CPU 12.3 GB · CUDA 1 20.0 GB",
+  );
+  assert.match(memory.title, /Memory of H200-101/);
+  assert.match(memory.title, /CUDA 0: 0\.1 GB free/);
   send({ type: "memory", cpu: { free: 299 * 1024 ** 2, total: 32 * GiB } });
   assert.match(memory.textContent ?? "", /Low memory: offload a model/);
   assert.equal(memory.classList.contains("memory-warning"), true);
@@ -2900,6 +2917,7 @@ function settingsSender(dom: JSDOM) {
     cliPath: "copilot",
     localWorkerPath: "devdash-genai-worker",
     requestTimeoutMinutes: 60,
+    workerIdleMinutes: 30,
     approvedUrlOrigins: [],
     copilotModel: "",
     copilotModelsStatus: "idle",
@@ -2919,6 +2937,21 @@ function settingsSender(dom: JSDOM) {
       }),
     );
   };
+}
+
+function acknowledgeExecutionSave(
+  dom: JSDOM,
+  save: Extract<ApplicationMessage, { type: "execution-configuration" }>,
+): void {
+  dom.window.dispatchEvent(
+    new dom.window.MessageEvent("message", {
+      data: {
+        type: "execution-configuration-saved",
+        requestId: save.requestId,
+        configuration: save.configuration,
+      },
+    }),
+  );
 }
 
 function optionsOf(select: HTMLSelectElement): string[][] {
@@ -4839,6 +4872,7 @@ test("the settings panel adds, selects and removes remote execution machines", a
     machines: [machine],
     selected: "azure-vm",
   });
+
   send({ remoteMachines: [machine], remoteMachine: "azure-vm" });
   assert.deepEqual(optionsOf(select), [
     ["", "This computer"],
@@ -4861,4 +4895,770 @@ test("the settings panel adds, selects and removes remote execution machines", a
     machines: [],
     selected: "",
   });
+});
+
+test("the local machine is ready to edit and save when settings load", async (t) => {
+  const { dom, document, posted } = await setup(t);
+  const send = settingsSender(dom);
+  const local = {
+    id: "local",
+    name: "This computer",
+    command: "",
+    repositoriesPath: "/projects",
+    modelsPath: "/models",
+    workerPath: "worker",
+    cliPath: "copilot",
+  };
+  const remote = { ...local, id: "gpu", name: "GPU", command: "ssh host" };
+  const execution: NonNullable<SettingsState["execution"]> = {
+    machines: [local, remote],
+    workers: [
+      {
+        id: "copilot-local",
+        name: "Copilot",
+        machineId: "local",
+        backend: "copilot",
+        model: { kind: "copilot", source: "" },
+        provider: "cpu",
+        deviceId: 0,
+      },
+    ],
+  };
+  send({ execution });
+  const select = document.querySelector<HTMLSelectElement>("#machine-entry")!;
+  const id = document.querySelector<HTMLInputElement>("#machine-id")!;
+  const command = document.querySelector<HTMLInputElement>("#machine-command")!;
+  const repositories = document.querySelector<HTMLInputElement>(
+    "#machine-repositories",
+  )!;
+  const models = document.querySelector<HTMLInputElement>("#machine-models")!;
+  const form = document.querySelector<HTMLFormElement>(
+    "#machine-configuration",
+  )!;
+  assert.equal(select.value, "local");
+  assert.equal(id.value, "local");
+  assert.equal(id.readOnly, true);
+  assert.equal(command.value, "");
+  assert.equal(command.readOnly, true);
+  assert.equal(repositories.value, "/projects");
+  assert.equal(models.value, "/models");
+
+  repositories.value = "/other/projects";
+  send({ execution, copilotModelsStatus: "loading" });
+  assert.equal(repositories.value, "/other/projects");
+  form.requestSubmit();
+  const saved = posted.at(-1)!;
+  assert.equal(saved.type, "execution-configuration");
+  if (saved.type !== "execution-configuration") assert.fail();
+  assert.equal(saved.configuration.machines.length, 2);
+  assert.deepEqual(
+    saved.configuration.machines.find((machine) => machine.id === "local"),
+    { ...local, repositoriesPath: "/other/projects" },
+  );
+  assert.deepEqual(
+    saved.configuration.machines.find((machine) => machine.id === "gpu"),
+    remote,
+  );
+  assert.deepEqual(saved.configuration.workers, execution.workers);
+  assert.deepEqual(parseApplicationMessage(saved), saved);
+
+  assert.equal(
+    document.querySelector<HTMLButtonElement>("#save-machine")!.disabled,
+    true,
+  );
+  dom.window.dispatchEvent(
+    new dom.window.MessageEvent("message", {
+      data: {
+        type: "execution-configuration-saved",
+        requestId: "older-save",
+        configuration: execution,
+      },
+    }),
+  );
+  dom.window.dispatchEvent(
+    new dom.window.MessageEvent("message", {
+      data: {
+        type: "execution-configuration-error",
+        requestId: "older-save",
+        message: "An earlier save failed.",
+      },
+    }),
+  );
+  assert.equal(
+    document.querySelector<HTMLButtonElement>("#save-machine")!.disabled,
+    true,
+  );
+  send({ execution: saved.configuration });
+  assert.match(
+    document.querySelector("#machine-configuration-status")!.textContent!,
+    /Saving/,
+  );
+  acknowledgeExecutionSave(dom, saved);
+  assert.equal(
+    document.querySelector<HTMLButtonElement>("#save-machine")!.disabled,
+    false,
+  );
+  assert.match(
+    document.querySelector("#machine-configuration-status")!.textContent!,
+    /saved/,
+  );
+  select.value = "";
+  select.dispatchEvent(new dom.window.Event("change"));
+  for (const [field, value] of Object.entries({
+    "machine-id": "local",
+    "machine-name": "Another local machine",
+    "machine-repositories": "/projects",
+    "machine-models": "/models",
+  }))
+    document.querySelector<HTMLInputElement>(`#${field}`)!.value = value;
+  const before = posted.length;
+  form.requestSubmit();
+  assert.equal(posted.length, before);
+  assert.match(
+    document.querySelector("#machine-configuration-status")!.textContent!,
+    /local machine already exists; select it/,
+  );
+  select.value = "local";
+  select.dispatchEvent(new dom.window.Event("change"));
+  assert.equal(repositories.value, "/other/projects");
+  assert.doesNotMatch(
+    document.querySelector("#machine-configuration-status")!.textContent!,
+    /local machine already exists/,
+  );
+});
+
+test("initial machine settings do not discard edits already started", async (t) => {
+  const { dom, document } = await setup(t);
+  const repositories = document.querySelector<HTMLInputElement>(
+    "#machine-repositories",
+  )!;
+  repositories.value = "/remote/projects";
+  repositories.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  settingsSender(dom)({
+    execution: {
+      machines: [
+        {
+          id: "local",
+          name: "This computer",
+          command: "",
+          repositoriesPath: "/projects",
+          modelsPath: "/models",
+          workerPath: "worker",
+          cliPath: "copilot",
+        },
+      ],
+      workers: [],
+    },
+  });
+  assert.equal(
+    document.querySelector<HTMLSelectElement>("#machine-entry")!.value,
+    "",
+  );
+  assert.equal(repositories.value, "/remote/projects");
+});
+
+test("machine save errors remain visible next to the machine form", async (t) => {
+  const { dom, document, posted } = await setup(t);
+  const send = settingsSender(dom);
+  const execution: NonNullable<SettingsState["execution"]> = {
+    machines: [
+      {
+        id: "local",
+        name: "This computer",
+        command: "",
+        repositoriesPath: "/projects",
+        modelsPath: "/models",
+        workerPath: "worker",
+        cliPath: "copilot",
+      },
+    ],
+    workers: [],
+  };
+  send({ execution });
+  document.querySelector<HTMLInputElement>("#machine-repositories")!.value =
+    "~/projects";
+  document
+    .querySelector<HTMLFormElement>("#machine-configuration")!
+    .requestSubmit();
+  const attempted = posted.at(-1)!;
+  assert.equal(attempted.type, "execution-configuration");
+  if (attempted.type !== "execution-configuration") assert.fail();
+  assert.throws(() => parseApplicationMessage(attempted), /absolute/);
+  dom.window.dispatchEvent(
+    new dom.window.MessageEvent("message", {
+      data: {
+        type: "execution-configuration-error",
+        requestId: attempted.requestId,
+        message: "Machine directories must be absolute.",
+      },
+    }),
+  );
+  const status = document.querySelector<HTMLElement>(
+    "#machine-configuration-status",
+  )!;
+  assert.match(status.textContent!, /directories must be absolute/);
+  assert.equal(
+    document.querySelector<HTMLButtonElement>("#save-machine")!.disabled,
+    false,
+  );
+  send({ execution, copilotModelsStatus: "loading" });
+  assert.match(status.textContent!, /directories must be absolute/);
+  document.querySelector<HTMLInputElement>("#machine-repositories")!.value =
+    "/valid/projects";
+  document
+    .querySelector<HTMLFormElement>("#machine-configuration")!
+    .requestSubmit();
+  assert.match(status.textContent!, /Saving/);
+  assert.doesNotThrow(() => parseApplicationMessage(posted.at(-1)));
+  const saved = posted.at(-1)!;
+  assert.equal(saved.type, "execution-configuration");
+  if (saved.type !== "execution-configuration") assert.fail();
+  acknowledgeExecutionSave(dom, saved);
+  assert.match(status.textContent!, /saved/);
+});
+
+test("a worker save cannot overwrite a machine save still in progress", async (t) => {
+  const { dom, document, posted } = await setup(t);
+  const send = settingsSender(dom);
+  const execution: NonNullable<SettingsState["execution"]> = {
+    machines: [
+      {
+        id: "local",
+        name: "This computer",
+        command: "",
+        repositoriesPath: "/projects",
+        modelsPath: "/models",
+        workerPath: "worker",
+        cliPath: "copilot",
+      },
+    ],
+    workers: [],
+  };
+  send({ execution });
+  document.querySelector<HTMLInputElement>("#machine-repositories")!.value =
+    "/new/projects";
+  document
+    .querySelector<HTMLFormElement>("#machine-configuration")!
+    .requestSubmit();
+  const machineSave = posted.at(-1)!;
+  assert.equal(machineSave.type, "execution-configuration");
+  if (machineSave.type !== "execution-configuration") assert.fail();
+
+  const workerId = document.querySelector<HTMLInputElement>("#worker-id")!;
+  workerId.value = "qwen";
+  document.querySelector<HTMLInputElement>("#worker-name")!.value = "Qwen";
+  const workerKind = document.querySelector<HTMLSelectElement>("#worker-kind")!;
+  workerKind.value = "model-id";
+  workerKind.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  document.querySelector<HTMLInputElement>("#worker-source")!.value =
+    "Qwen/Qwen3-0.6B";
+  const workerForm = document.querySelector<HTMLFormElement>(
+    "#worker-configuration",
+  )!;
+  const saveWorker = document.querySelector<HTMLButtonElement>("#save-worker")!;
+  assert.equal(saveWorker.disabled, true);
+  const before = posted.length;
+  workerForm.requestSubmit();
+  assert.equal(posted.length, before);
+  acknowledgeExecutionSave(dom, machineSave);
+  assert.equal(saveWorker.disabled, false);
+  assert.match(
+    document.querySelector("#execution-configuration-status")!.textContent!,
+    /newer edits are unsaved/,
+  );
+  workerForm.requestSubmit();
+  const workerSave = posted.at(-1)!;
+  assert.equal(workerSave.type, "execution-configuration");
+  if (workerSave.type !== "execution-configuration") assert.fail();
+  assert.equal(
+    workerSave.configuration.machines[0]!.repositoriesPath,
+    "/new/projects",
+  );
+  assert.equal(workerSave.configuration.workers[0]!.id, "qwen");
+});
+
+test("machine and worker forms preserve independent paths, repeated hosts and one model/device", async (t) => {
+  const { dom, document, posted } = await setup(t);
+  const send = settingsSender(dom);
+  const local = {
+    id: "local",
+    name: "Local",
+    command: "",
+    repositoriesPath: "/projects",
+    modelsPath: "/models",
+    workerPath: "worker",
+    cliPath: "copilot",
+  };
+  const remote = { ...local, id: "gpu", name: "GPU", command: "ssh host" };
+  let execution: NonNullable<SettingsState["execution"]> = {
+    machines: [local, remote],
+    workers: [],
+  };
+  send({ execution });
+  const machineEntry =
+    document.querySelector<HTMLSelectElement>("#machine-entry")!;
+  machineEntry.value = "";
+  machineEntry.dispatchEvent(new dom.window.Event("change"));
+  const input = (id: string, value: string): void => {
+    document.querySelector<HTMLInputElement | HTMLSelectElement>(
+      `#${id}`,
+    )!.value = value;
+  };
+  for (const [id, value] of Object.entries({
+    "machine-id": "gpu-copy",
+    "machine-name": "Second entry",
+    "machine-command": "ssh host",
+    "machine-repositories": "/other/repos",
+    "machine-models": "/other/models",
+    "machine-worker": "worker",
+    "machine-copilot": "/bin/copilot",
+  }))
+    input(id, value);
+  const machineForm = document.querySelector<HTMLFormElement>(
+    "#machine-configuration",
+  )!;
+  input("machine-id", "gpu copy");
+  const beforeInvalidMachine = posted.length;
+  machineForm.requestSubmit();
+  assert.equal(posted.length, beforeInvalidMachine);
+  input("machine-id", "gpu-copy");
+  machineForm.requestSubmit();
+  const added = posted.at(-1)!;
+  assert.equal(added.type, "execution-configuration");
+  if (added.type !== "execution-configuration") assert.fail();
+  execution = added.configuration;
+  assert.equal(execution.machines.length, 3);
+  assert.equal(execution.machines[2]!.command, remote.command);
+  send({ execution });
+  acknowledgeExecutionSave(dom, added);
+  for (const [id, value] of Object.entries({
+    "worker-id": "qwen",
+    "worker-name": "Qwen CUDA",
+    "worker-machine": "gpu-copy",
+    "worker-kind": "model-id",
+    "worker-source": "Qwen/Qwen3-0.6B",
+    "worker-provider": "cuda",
+    "worker-device": "2",
+  }))
+    input(id, value);
+  document
+    .querySelector<HTMLSelectElement>("#worker-kind")!
+    .dispatchEvent(new dom.window.Event("change"));
+  const workerForm = document.querySelector<HTMLFormElement>(
+    "#worker-configuration",
+  )!;
+  input("worker-id", "qwen cuda");
+  const beforeInvalidWorker = posted.length;
+  workerForm.requestSubmit();
+  assert.equal(posted.length, beforeInvalidWorker);
+  input("worker-id", "qwen");
+  workerForm.requestSubmit();
+  const saved = posted.at(-1)!;
+  assert.equal(saved.type, "execution-configuration");
+  if (saved.type !== "execution-configuration") assert.fail();
+  assert.deepEqual(saved.configuration.workers[0], {
+    id: "qwen",
+    name: "Qwen CUDA",
+    machineId: "gpu-copy",
+    backend: "local",
+    model: { kind: "model-id", source: "Qwen/Qwen3-0.6B" },
+    provider: "cuda",
+    deviceId: 2,
+  });
+  send({ execution: saved.configuration });
+  acknowledgeExecutionSave(dom, saved);
+  machineEntry.value = "gpu-copy";
+  machineEntry.dispatchEvent(new dom.window.Event("change"));
+  const before = posted.length;
+  document.querySelector<HTMLButtonElement>("#delete-machine")!.click();
+  assert.equal(posted.length, before);
+  assert.match(
+    document.querySelector("#execution-configuration-status")!.textContent!,
+    /reassign/,
+  );
+  machineEntry.value = "local";
+  machineEntry.dispatchEvent(new dom.window.Event("change"));
+  assert.equal(
+    document.querySelector<HTMLButtonElement>("#delete-machine")!.disabled,
+    true,
+  );
+});
+
+test("Foundry workers pick a catalogue model for the selected device", async (t) => {
+  const { dom, document, posted } = await setup(t);
+  const local = {
+    id: "local",
+    name: "Local",
+    command: "",
+    repositoriesPath: "/projects",
+    modelsPath: "/models",
+    workerPath: "worker",
+    cliPath: "copilot",
+  };
+  settingsSender(dom)({ execution: { machines: [local], workers: [] } });
+  const field = <T extends HTMLElement>(id: string): T =>
+    document.querySelector<T>(`#${id}`)!;
+  const kind = field<HTMLSelectElement>("worker-kind");
+  const provider = field<HTMLSelectElement>("worker-provider");
+  const catalogue = field<HTMLSelectElement>("worker-foundry-model");
+  const requests = () =>
+    posted.filter((message) => message.type === "worker-foundry-models");
+  assert.equal(field("worker-foundry").hidden, true);
+  assert.equal(requests().length, 0);
+  kind.value = "foundry";
+  kind.dispatchEvent(new dom.window.Event("change"));
+  assert.equal(field("worker-foundry").hidden, false);
+  assert.equal(catalogue.disabled, true);
+  const reply = (data: object): void => {
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent("message", {
+        data: { type: "worker-foundry-models", ...data },
+      }),
+    );
+  };
+  const [cpu] = requests();
+  if (cpu?.type !== "worker-foundry-models") assert.fail();
+  assert.equal(cpu.device, "cpu");
+  reply({ requestId: "stale", device: "cpu", models: [] });
+  assert.equal(catalogue.disabled, true);
+  const cpuId =
+    "azureml://registries/azureml/models/qwen3-0.6b-generic-cpu/versions/4";
+  reply({
+    requestId: cpu.requestId,
+    device: "cpu",
+    models: [{ id: cpuId, name: "qwen3-0.6b-generic-cpu:4", size: 2 ** 30 }],
+  });
+  assert.equal(catalogue.disabled, false);
+  catalogue.value = cpuId;
+  catalogue.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert.equal(field<HTMLInputElement>("worker-source").value, cpuId);
+  provider.value = "cuda";
+  provider.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  const gpu = requests()[1];
+  if (gpu?.type !== "worker-foundry-models") assert.fail();
+  assert.equal(gpu.device, "gpu");
+  reply({ requestId: gpu.requestId, device: "gpu", error: "offline" });
+  assert.match(field("worker-foundry-status").textContent!, /offline/);
+  provider.value = "cpu";
+  provider.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert.equal(requests().length, 2, "cached catalogues are reused");
+  assert.equal(catalogue.value, cpuId);
+  field<HTMLInputElement>("worker-id").value = "qwen";
+  field<HTMLInputElement>("worker-name").value = "Qwen";
+  field<HTMLFormElement>("worker-configuration").requestSubmit();
+  const saved = posted.at(-1)!;
+  if (saved.type !== "execution-configuration") assert.fail();
+  assert.deepEqual(saved.configuration.workers[0]!.model, {
+    kind: "foundry",
+    source: cpuId,
+  });
+});
+
+test("a saved remote machine gets a one-click Copilot worker and explained placement", async (t) => {
+  const { dom, document, posted } = await setup(t);
+  const local = {
+    id: "local",
+    name: "Local",
+    command: "",
+    repositoriesPath: "/projects",
+    modelsPath: "/models",
+    workerPath: "worker",
+    cliPath: "copilot",
+  };
+  const remote = {
+    ...local,
+    id: "gpu",
+    name: "GPU",
+    command: "ssh gpu",
+    cliPath: "/opt/copilot",
+  };
+  const copilot = {
+    id: "copilot-gpu",
+    name: "Existing",
+    machineId: "local",
+    backend: "copilot" as const,
+    model: { kind: "copilot" as const, source: "" },
+    provider: "cpu" as const,
+    deviceId: 0,
+  };
+  settingsSender(dom)({
+    execution: { machines: [local, remote], workers: [copilot] },
+  });
+  const add = document.querySelector<HTMLButtonElement>(
+    "#add-machine-copilot-worker",
+  )!;
+  const machineEntry =
+    document.querySelector<HTMLSelectElement>("#machine-entry")!;
+  machineEntry.value = "";
+  machineEntry.dispatchEvent(new dom.window.Event("change"));
+  assert.equal(add.disabled, true, "unsaved machines have no worker yet");
+  machineEntry.value = "gpu";
+  machineEntry.dispatchEvent(new dom.window.Event("change"));
+  add.click();
+  const saved = posted.at(-1)!;
+  if (saved.type !== "execution-configuration") assert.fail();
+  assert.deepEqual(saved.configuration.workers[1], {
+    ...copilot,
+    id: "copilot-gpu-2",
+    name: "Copilot @ GPU",
+    machineId: "gpu",
+  });
+  const workerMachine =
+    document.querySelector<HTMLSelectElement>("#worker-machine")!;
+  workerMachine.value = "gpu";
+  workerMachine.dispatchEvent(new dom.window.Event("change"));
+  assert.match(
+    document.querySelector("#worker-kind-hint")!.textContent!,
+    /Copilot CLI \(\/opt\/copilot\) runs on GPU \(remote\)/,
+  );
+});
+
+test("the worker table lists running workers and stops idle ones on demand", async (t) => {
+  const { dom, document, posted } = await setup(t);
+  const send = (models: object[]): void => {
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent("message", {
+        data: { type: "local-models", models },
+      }),
+    );
+  };
+  const base = {
+    modelPath: "/models/qwen",
+    name: "Qwen",
+    placement: { provider: "cuda", deviceId: 1 },
+    device: { provider: "cuda", deviceId: 1, name: "GPU" },
+    status: "ready",
+    sessions: [{ repositoryId: "repo", cacheTokens: 0 }],
+  };
+  send([
+    {
+      ...base,
+      id: "idle",
+      busy: false,
+      workerName: "Qwen CUDA",
+      machineName: "GPU host",
+      idleStopAt: new Date(2026, 0, 1, 14, 5).getTime(),
+    },
+    { ...base, id: "busy", busy: true, workerName: "Busy", machineName: "X" },
+    { ...base, id: "off", busy: false, status: "unloaded", device: undefined },
+  ]);
+  const rows = [
+    ...document.querySelectorAll<HTMLTableRowElement>("#worker-table tbody tr"),
+  ];
+  assert.equal(rows.length, 2, "stopped workers are not listed");
+  const cells = [...rows[0]!.cells].map((cell) => cell.textContent);
+  assert.deepEqual(cells.slice(0, 6), [
+    "Qwen CUDA",
+    "GPU host",
+    "Qwen",
+    "CUDA 1",
+    "ready",
+    "1",
+  ]);
+  assert.equal(
+    cells[6],
+    `at ${new Date(2026, 0, 1, 14, 5).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+  );
+  assert.equal(rows[1]!.cells[6]!.textContent, "not while running");
+  assert.equal(rows[1]!.querySelector("button")!.disabled, true);
+  rows[0]!.querySelector("button")!.click();
+  assert.deepEqual(posted.at(-1), {
+    type: "stop-local-worker",
+    hostId: "idle",
+  });
+  dom.window.dispatchEvent(
+    new dom.window.MessageEvent("message", {
+      data: {
+        type: "copilot-workers",
+        workers: [
+          {
+            groupId: "a".repeat(64),
+            workerName: "Copilot @ GPU",
+            machineName: "GPU host",
+            model: "CLI default",
+            sessions: [{ repositoryId: "repo", view: "copilot" }],
+            busy: false,
+          },
+          {
+            groupId: "b".repeat(64),
+            workerName: "Copilot (no worker)",
+            machineName: "This computer",
+            model: "gpt",
+            sessions: [],
+            busy: true,
+          },
+        ],
+      },
+    }),
+  );
+  send([]);
+  const copilotRows = [
+    ...document.querySelectorAll<HTMLTableRowElement>("#worker-table tbody tr"),
+  ];
+  assert.deepEqual(
+    [...copilotRows[0]!.cells].slice(0, 7).map((cell) => cell.textContent),
+    [
+      "Copilot @ GPU",
+      "GPU host",
+      "Copilot: CLI default",
+      "Copilot CLI",
+      "ready",
+      "1",
+      "never",
+    ],
+  );
+  assert.equal(copilotRows[1]!.querySelector("button")!.disabled, true);
+  copilotRows[0]!.querySelector("button")!.click();
+  assert.deepEqual(posted.at(-1), {
+    type: "stop-copilot-worker",
+    groupId: "a".repeat(64),
+  });
+  dom.window.dispatchEvent(
+    new dom.window.MessageEvent("message", {
+      data: { type: "copilot-workers", workers: [] },
+    }),
+  );
+  assert.equal(
+    document.querySelector<HTMLElement>("#worker-table-empty")!.hidden,
+    false,
+  );
+});
+
+test("the session dialog chooses the worker, its machine and the harness machine", async (t) => {
+  const { dom, document, posted } = await setup(t);
+  const local = {
+    id: "local",
+    name: "Local",
+    command: "",
+    repositoriesPath: "/projects",
+    modelsPath: "/models",
+    workerPath: "worker",
+    cliPath: "copilot",
+  };
+  const remote = {
+    ...local,
+    id: "h200",
+    name: "H200",
+    command: "ssh h200",
+    repositoriesPath: "/data/repos",
+    modelsPath: "/data/models",
+  };
+  const copilot = {
+    id: "copilot-local",
+    name: "Copilot",
+    machineId: "local",
+    backend: "copilot" as const,
+    model: { kind: "copilot" as const, source: "" },
+    provider: "cpu" as const,
+    deviceId: 0,
+  };
+  const qwen = {
+    ...copilot,
+    id: "qwen",
+    name: "Qwen",
+    machineId: "h200",
+    backend: "local" as const,
+    model: { kind: "foundry" as const, source: "qwen-cuda" },
+    provider: "cuda" as const,
+    deviceId: 7,
+  };
+  settingsSender(dom)({
+    execution: { machines: [local, remote], workers: [copilot, qwen] },
+  });
+  const send = (data: unknown) =>
+    dom.window.dispatchEvent(new dom.window.MessageEvent("message", { data }));
+  const dialog = document.querySelector<HTMLElement>("#assignment-dialog")!;
+  const worker =
+    document.querySelector<HTMLSelectElement>("#assignment-worker")!;
+  const workerMachine = document.querySelector<HTMLSelectElement>(
+    "#assignment-worker-machine",
+  )!;
+  const harness = document.querySelector<HTMLSelectElement>(
+    "#assignment-harness-machine",
+  )!;
+  const summary = document.querySelector<HTMLElement>("#assignment-summary")!;
+  const invoker = document.querySelector<HTMLButtonElement>("#refresh")!;
+  invoker.focus();
+  assert.equal(dialog.hidden, true);
+  send({
+    type: "choose-assignment",
+    requestId: "r1",
+    repositoryId: "/src/alpha",
+  });
+  assert.equal(dialog.hidden, false);
+  assert.equal(document.activeElement, worker);
+  assert.equal(
+    document.querySelector("main.application")!.hasAttribute("inert"),
+    true,
+  );
+  const cancel =
+    document.querySelector<HTMLButtonElement>("#assignment-cancel")!;
+  worker.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", {
+      key: "Tab",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  assert.equal(document.activeElement, cancel);
+  cancel.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  assert.equal(document.activeElement, worker);
+  invoker.focus();
+  assert.equal(document.activeElement, worker);
+  assert.equal(worker.options.length, 2);
+  // Copilot follows the harness machine.
+  assert.equal(workerMachine.disabled, true);
+  harness.value = "h200";
+  harness.dispatchEvent(new dom.window.Event("change"));
+  assert.equal(workerMachine.value, "h200");
+  worker.value = "qwen";
+  worker.dispatchEvent(new dom.window.Event("change"));
+  assert.equal(workerMachine.disabled, false);
+  assert.equal(workerMachine.value, "h200");
+  harness.value = "local";
+  harness.dispatchEvent(new dom.window.Event("change"));
+  assert.equal(
+    summary.textContent,
+    [
+      "Agent and model: Qwen (Foundry: qwen-cuda · CUDA device 7)",
+      "Model runs on: H200 (remote)",
+      "Files and commands on: Local (this computer) in /projects/alpha",
+    ].join("\n"),
+  );
+  posted.length = 0;
+  document.querySelector<HTMLFormElement>("#assignment-form")!.requestSubmit();
+  assert.deepEqual(posted, [
+    {
+      type: "assignment-choice",
+      requestId: "r1",
+      choice: {
+        workerId: "qwen",
+        workerMachineId: "h200",
+        executionMachineId: "local",
+      },
+    },
+  ]);
+  assert.equal(dialog.hidden, true);
+  assert.equal(document.activeElement, invoker);
+  assert.equal(
+    document.querySelector("main.application")!.hasAttribute("inert"),
+    false,
+  );
+  send({
+    type: "choose-assignment",
+    requestId: "r2",
+    repositoryId: "/src/alpha",
+    backend: "local",
+  });
+  assert.equal(worker.options.length, 1);
+  posted.length = 0;
+  document.querySelector<HTMLButtonElement>("#assignment-cancel")!.click();
+  assert.deepEqual(posted, [{ type: "assignment-choice", requestId: "r2" }]);
 });
