@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import {
   chmod,
@@ -79,6 +80,7 @@ async function foundryServer(t: TestContext) {
     blobHost: "fixtures.blob.core.windows.net",
     transferStatus: 200,
     transferSuffix: "",
+    signature: "fixture-signature",
   };
   const escape = (text: string): string =>
     text.replaceAll("&", "&amp;").replaceAll("<", "&lt;");
@@ -110,7 +112,7 @@ async function foundryServer(t: TestContext) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
-            blobSasUri: `https://${state.blobHost}/package?sig=fixture-signature`,
+            blobSasUri: `https://${state.blobHost}/package?sig=${state.signature}`,
           }),
         );
       } else if (url.searchParams.get("comp") === "list") {
@@ -347,17 +349,27 @@ test(
   { skip: process.platform === "win32" },
   async (t) => {
     const hub = await foundryServer(t);
+    hub.state.signature = 'fixture-signature\\tail"quoted';
     const bin = join(hub.root, "bin");
     await mkdir(bin);
-    // Stands in for curl on the remote machine, fetching from the fixture server.
+    const realCurl = execFileSync("which", ["curl"], {
+      encoding: "utf8",
+    }).trim();
+    // Redirect curl to the local fixture without putting the signed URL in argv.
     await writeFile(
       join(bin, "curl"),
       `#!${process.execPath}
 const args = process.argv.slice(2);
-const url = new URL(args.at(-1));
-fetch("http://127.0.0.1:${hub.port}" + url.pathname + url.search).then(async (response) => {
-  if (!response.ok) process.exit(22);
-  require("node:fs").writeFileSync(args[args.indexOf("-o") + 1], Buffer.from(await response.arrayBuffer()));
+if (args.some(arg => arg.includes("fixture-signature"))) process.exit(3);
+let config = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => config += chunk);
+process.stdin.on("end", async () => {
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const curl = require("node:child_process").spawn(${JSON.stringify(realCurl)}, args, { stdio: ["pipe", "ignore", "inherit"] });
+  curl.stdin.end(config.replace("https://fixtures.blob.core.windows.net", "http://127.0.0.1:${hub.port}"));
+  curl.on("error", () => process.exit(1));
+  curl.on("close", code => process.exit(code ?? 1));
 });
 `,
     );
@@ -373,12 +385,23 @@ fetch("http://127.0.0.1:${hub.port}" + url.pathname + url.search).then(async (re
     };
     const progress: { received: number; total: number }[] = [];
     const signal = AbortSignal.timeout(15_000);
-    const directory = await downloadRemoteFoundryModel(
-      machine,
-      asset,
-      signal,
-      (value) => progress.push(value),
-      hub.fetch,
+    const [directory, concurrent] = await Promise.all([
+      downloadRemoteFoundryModel(
+        machine,
+        asset,
+        signal,
+        (value) => progress.push(value),
+        hub.fetch,
+      ),
+      downloadRemoteFoundryModel(machine, asset, signal, undefined, hub.fetch),
+    ]);
+    assert.equal(concurrent, directory);
+    assert.ok(
+      hub.requests.some(
+        (request) =>
+          request.path.startsWith("/package/") &&
+          request.query.get("sig") === hub.state.signature,
+      ),
     );
     assert.equal(directory.startsWith(machine.modelsPath), true);
     for (const [file, bytes] of hub.files)

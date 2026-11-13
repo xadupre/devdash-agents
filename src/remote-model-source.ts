@@ -25,7 +25,9 @@ if [ "$kind" = model-id ]; then flag=-m; else flag=-i; fi
 python3 -m onnxruntime_genai.models.builder "$flag" "$source" -o "$temporary" -p int4 -e "$provider" -c "$temporary/.cache" --extra_options hf_remote=false >&2
 [ -f "$temporary/genai_config.json" ] || { echo "Export is missing genai_config.json" >&2; exit 2; }
 rm -rf -- "$temporary/.cache"
-mv -T -- "$temporary" "$target"
+if error=$(mv -T -- "$temporary" "$target" 2>&1); then :; else
+  [ -f "$target/genai_config.json" ] || { printf 'Could not publish prepared model: %s\\n' "$error" >&2; exit 2; }
+fi
 realpath -e -- "$target"
 `;
 
@@ -77,8 +79,9 @@ temporary=$(mktemp -d "$1/.upload-XXXXXX")
 trap 'rm -rf -- "$temporary"' EXIT HUP INT TERM
 tar -xf - -C "$temporary"
 [ -f "$temporary/genai_config.json" ] || { echo "Missing genai_config.json" >&2; exit 2; }
-if [ -f "$2/genai_config.json" ]; then exit; fi
-mv -T -- "$temporary" "$2"
+if error=$(mv -T -- "$temporary" "$2" 2>&1); then :; else
+  [ -f "$2/genai_config.json" ] || { printf 'Could not publish uploaded model: %s\\n' "$error" >&2; exit 2; }
+fi
 `;
   const launch = remoteInvocation(machine, [
     "sh",
@@ -135,8 +138,8 @@ mv -T -- "$temporary" "$2"
   return target;
 }
 
-// Reads "path<TAB>size<TAB>url" lines on stdin so signed URLs stay out of
-// process listings, and prints the downloaded byte count every few seconds.
+// Reads "path<TAB>size<TAB>curl-escaped-url" lines on stdin so signed URLs
+// stay out of process listings, and prints the downloaded byte count.
 const DOWNLOAD = `set -eu
 storage=$1; target=$2
 command -v curl >/dev/null || { echo "devdash-error: curl is required on the remote machine to download Foundry models." >&2; exit 2; }
@@ -151,11 +154,13 @@ monitor=$!
 tab=$(printf '\\t')
 while IFS=$tab read -r path size url; do
   mkdir -p -- "$(dirname -- "$temporary/$path")"
-  curl -fsL --retry 3 -o "$temporary/$path" -- "$url" </dev/null || { echo "devdash-error: Downloading $path failed (curl exit $?)." >&2; exit 2; }
+  printf 'url = "%s"\\n' "$url" | curl -q -fsL --retry 3 -o "$temporary/$path" --config - || { echo "devdash-error: Downloading $path failed (curl exit $?)." >&2; exit 2; }
   [ "$(stat -c %s -- "$temporary/$path")" = "$size" ] || { echo "devdash-error: Incomplete download of $path." >&2; exit 2; }
 done
 [ -f "$temporary/genai_config.json" ] || { echo "devdash-error: The package has no genai_config.json." >&2; exit 2; }
-[ -f "$target/genai_config.json" ] || mv -T -- "$temporary" "$target"
+if error=$(mv -T -- "$temporary" "$target" 2>&1); then :; else
+  [ -f "$target/genai_config.json" ] || { printf 'devdash-error: Could not publish downloaded model: %s\\n' "$error" >&2; exit 2; }
+fi
 `;
 
 /** Downloads a Foundry catalogue model directly on the remote machine. */
@@ -190,7 +195,10 @@ export async function downloadRemoteFoundryModel(
     {
       input: Buffer.from(
         files
-          .map((file) => `${file.path}\t${file.size}\t${file.url}\n`)
+          .map(
+            (file) =>
+              `${file.path}\t${file.size}\t${file.url.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}\n`,
+          )
           .join(""),
       ),
       signal,

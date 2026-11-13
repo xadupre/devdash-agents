@@ -66,9 +66,9 @@ import {
 
 export type SessionStatus =
   "idle" | "saved" | "starting" | "ready" | "busy" | "error" | "stopping";
-/** Open Copilot CLI sessions grouped by configured worker (empty id: no worker). */
+/** Open Copilot CLI sessions grouped by their saved worker and machine binding. */
 export interface CopilotWorkerSnapshot {
-  workerId: string;
+  groupId: string;
   workerName: string;
   machineName: string;
   model: string;
@@ -285,8 +285,7 @@ export type ApplicationMessage =
   | { type: "foundry-download"; id: string }
   | { type: "local-device"; provider: LocalProvider; deviceId: number }
   | { type: "stop-local-worker"; hostId: string }
-  /** Empty workerId targets Copilot sessions opened without a configured worker. */
-  | { type: "stop-copilot-worker"; workerId: string }
+  | { type: "stop-copilot-worker"; groupId: string }
   | {
       type: "local-placement";
       modelPath: string;
@@ -503,10 +502,10 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
     return { type: "stop-local-worker", hostId };
   }
   if (value.type === "stop-copilot-worker") {
-    const workerId = "workerId" in value ? value.workerId : undefined;
-    if (typeof workerId !== "string" || !/^[\w-]{0,100}$/.test(workerId))
+    const groupId = "groupId" in value ? value.groupId : undefined;
+    if (typeof groupId !== "string" || !/^[a-f0-9]{64}$/.test(groupId))
       throw new Error("Invalid Copilot worker.");
-    return { type: "stop-copilot-worker", workerId };
+    return { type: "stop-copilot-worker", groupId };
   }
   if (value.type === "local-placement") {
     const modelPath = "modelPath" in value ? value.modelPath : undefined;
@@ -2335,6 +2334,13 @@ export class AgentApplication {
     }
     return this.manageSession(id, async (session) => {
       if (session.sessionId === sessionId) {
+        if (
+          assignment &&
+          !session.assignment &&
+          !session.conversation &&
+          !session.starting
+        )
+          this.setAssignment(session, assignment);
         this.activeId = id;
         await this.startSession(session);
         return;
@@ -2363,6 +2369,8 @@ export class AgentApplication {
           assignment: assignment ?? session.assignment,
         },
       );
+      if (archived && assignment && !session.assignment)
+        this.setAssignment(session, assignment);
       if (!archived) {
         session.messages.push({
           role: "system",

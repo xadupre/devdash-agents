@@ -739,6 +739,12 @@ declare function acquireVsCodeApi(): {
     HTMLSelectElement,
   );
   const assignmentSummary = element("assignment-summary", HTMLElement);
+  const assignmentBackground = [
+    document.querySelector<HTMLElement>("main.application")!,
+    element("repository-menu", HTMLElement),
+  ];
+  let assignmentFocus: HTMLElement | undefined;
+  let backgroundWasInert: boolean[] | undefined;
   let assignmentRequest:
     { requestId: string; repositoryId: string; backend?: string } | undefined;
   const assignmentModelKinds: Record<string, string> = {
@@ -811,6 +817,13 @@ declare function acquireVsCodeApi(): {
     });
     assignmentRequest = undefined;
     assignmentDialog.hidden = true;
+    if (backgroundWasInert)
+      assignmentBackground.forEach((element, index) => {
+        if (!backgroundWasInert?.[index]) element.removeAttribute("inert");
+      });
+    backgroundWasInert = undefined;
+    if (assignmentFocus?.isConnected) assignmentFocus.focus();
+    assignmentFocus = undefined;
   };
   const openAssignmentDialog = (request: {
     requestId: string;
@@ -828,6 +841,16 @@ declare function acquireVsCodeApi(): {
       closeAssignmentDialog();
       return;
     }
+    assignmentFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : undefined;
+    backgroundWasInert = assignmentBackground.map((element) =>
+      element.hasAttribute("inert"),
+    );
+    assignmentBackground.forEach((element) =>
+      element.setAttribute("inert", ""),
+    );
     assignmentTitle.textContent = `New ${request.backend === "local" ? "local model " : request.backend === "copilot" ? "Copilot " : ""}session for ${repositoryFolder(request.repositoryId)}`;
     const fill = (
       select: HTMLSelectElement,
@@ -890,7 +913,33 @@ declare function acquireVsCodeApi(): {
     () => closeAssignmentDialog(),
   );
   assignmentDialog.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeAssignmentDialog();
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeAssignmentDialog();
+    } else if (event.key === "Tab") {
+      const controls = [
+        ...assignmentForm.querySelectorAll<
+          HTMLButtonElement | HTMLSelectElement
+        >("button, select"),
+      ].filter((control) => !control.disabled);
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    }
+  });
+  document.addEventListener("focusin", (event) => {
+    if (
+      assignmentRequest &&
+      event.target instanceof Node &&
+      !assignmentDialog.contains(event.target)
+    )
+      assignmentWorker.focus();
   });
   let copilotModelsRequested = false;
   const showSettings = (): void => {
@@ -1982,12 +2031,12 @@ declare function acquireVsCodeApi(): {
             String(worker.sessions.length),
             autoStop(worker.busy, worker.idleStopAt),
           ],
-          `copilot:${worker.workerId}`,
+          `copilot:${worker.groupId}`,
           worker.busy,
           worker.busy
             ? "Wait for the running requests to finish"
             : "Close this worker's Copilot CLI sessions and free their memory; Resume continues them",
-          { type: "stop-copilot-worker", workerId: worker.workerId },
+          { type: "stop-copilot-worker", groupId: worker.groupId },
         ),
       ),
     );

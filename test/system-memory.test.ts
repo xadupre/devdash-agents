@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   cpuMemory,
+  currentMemorySample,
   MemoryMonitor,
   parseNvidiaMemory,
   parseRemoteMemory,
@@ -10,6 +11,31 @@ import {
 import { join } from "node:path";
 
 const MiB = 1024 ** 2;
+
+test("memory samples from a previously active worker are discarded", async () => {
+  const previous = {};
+  const next = {};
+  let active = previous;
+  let complete!: (update: {
+    type: "memory";
+    cpu: { free: number; total: number };
+  }) => void;
+  const sample = currentMemorySample(
+    () => active,
+    () => new Promise((resolve) => (complete = resolve)),
+  );
+  active = next;
+  complete({ type: "memory", cpu: { free: 1, total: 2 } });
+  assert.equal(await sample, undefined);
+  const update = { type: "memory" as const, cpu: { free: 3, total: 4 } };
+  assert.equal(
+    await currentMemorySample(
+      () => active,
+      async () => update,
+    ),
+    update,
+  );
+});
 
 test("nvidia-smi memory output is parsed per GPU and invalid values are rejected", () => {
   assert.deepEqual(parseNvidiaMemory("7959, 8188\r\n100, 24576\n"), [

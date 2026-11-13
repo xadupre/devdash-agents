@@ -85,6 +85,7 @@ export class LocalModelHost {
   private pendingPlacements = 0;
   private idleTimer?: ReturnType<typeof setTimeout>;
   private idleStopAt?: number;
+  private idleSince?: number;
 
   constructor(
     readonly modelPath: string,
@@ -421,21 +422,55 @@ export class LocalModelHost {
     clearTimeout(this.idleTimer);
     this.idleTimer = undefined;
     this.idleStopAt = undefined;
+    this.idleSince = undefined;
   }
 
   private scheduleIdleStop(): void {
     this.cancelIdleStop();
+    if (this.active || this.status !== "ready") return;
+    this.idleSince = Date.now();
+    this.refreshIdleTimeout();
+  }
+
+  refreshIdleTimeout(): void {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = undefined;
+    this.idleStopAt = undefined;
     const timeout = this.idleTimeoutMs();
-    if (this.active || this.status !== "ready" || !(timeout > 0)) return;
-    this.idleStopAt = Date.now() + timeout;
-    this.idleTimer = setTimeout(() => {
-      this.idleTimer = undefined;
-      if (this.active || this.status !== "ready") return;
-      this.onEvent(
-        `Idle for ${Math.round(timeout / 60_000)} min; stopping the worker to free memory.`,
-      );
-      void this.stop().catch(() => {});
-    }, timeout);
+    if (
+      this.active ||
+      this.status !== "ready" ||
+      this.idleSince === undefined ||
+      !(timeout > 0)
+    )
+      return;
+    this.idleStopAt = this.idleSince + timeout;
+    this.idleTimer = setTimeout(
+      () => {
+        this.idleTimer = undefined;
+        if (this.active || this.status !== "ready") return;
+        const currentTimeout = this.idleTimeoutMs();
+        if (
+          !(currentTimeout > 0) ||
+          this.idleSince === undefined ||
+          Date.now() < this.idleSince + currentTimeout
+        ) {
+          this.refreshIdleTimeout();
+          this.onChange();
+          return;
+        }
+        this.onEvent(
+          `Idle for ${Math.round(currentTimeout / 60_000)} min; stopping the worker to free memory.`,
+        );
+        void this.stop().catch((error: unknown) =>
+          this.onEvent(
+            `Idle worker stop failed: ${error instanceof Error ? error.message : String(error)}`,
+            "error",
+          ),
+        );
+      },
+      Math.max(0, this.idleStopAt - Date.now()),
+    );
     this.idleTimer.unref?.();
   }
 

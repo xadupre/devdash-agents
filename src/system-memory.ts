@@ -19,6 +19,15 @@ export interface MemoryUpdate {
   deviceId?: number;
 }
 
+export async function currentMemorySample<T>(
+  current: () => T,
+  sample: (identity: T) => Promise<MemoryUpdate>,
+): Promise<MemoryUpdate | undefined> {
+  const identity = current();
+  const update = await sample(identity);
+  return current() === identity ? update : undefined;
+}
+
 const MiB = 1024 ** 2;
 
 /** Parses `nvidia-smi --query-gpu=memory.free,memory.total --format=csv,noheader,nounits`. */

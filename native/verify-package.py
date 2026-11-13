@@ -11,6 +11,38 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 
+NATIVE_SOURCES = {
+    "native/CMakeLists.txt",
+    "native/setup-worker.sh",
+    *(f"native/src/{name}" for name in (
+        "cuda_discovery.cpp", "cuda_discovery.h", "genai_backend.cpp",
+        "main.cpp", "provider_policy.cpp", "provider_policy.h",
+        "unavailable_backend.cpp", "worker.cpp", "worker.h",
+    )),
+}
+
+
+def verify_entries(names, allowed):
+    runtime = []
+    for name in names:
+        path = PurePosixPath(name)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError(f"Unsafe VSIX entry: {name}")
+        if name.startswith(("extension/build/", "extension/.venv/")) or (
+            name.startswith("extension/native/")
+            and name.removeprefix("extension/") not in NATIVE_SOURCES
+        ):
+            raise ValueError(f"Build or SDK files leaked into the VSIX: {name}")
+        if path.name == "genai_config.json" or ".onnx" in path.name:
+            raise ValueError(f"Model data leaked into the VSIX: {name}")
+        if name.startswith("extension/runtime/") and not name.endswith("/"):
+            relative = name.removeprefix("extension/runtime/")
+            if not any(fnmatch.fnmatchcase(relative, pattern) for pattern in allowed):
+                raise ValueError(f"Unexpected native bundle file: {name}")
+            runtime.append(name)
+    return runtime
+
+
 def verify(filename):
     with zipfile.ZipFile(filename) as archive:
         names = archive.namelist()
@@ -26,20 +58,7 @@ def verify(filename):
         if platform not in libraries or manifest["variant"] not in ("cpu", "cuda"):
             raise ValueError("Unsupported native runtime manifest")
         allowed = ("manifest.json", f"bin/{executable}", "licenses/*", *libraries[platform])
-        runtime = []
-        for name in names:
-            path = PurePosixPath(name)
-            if path.is_absolute() or ".." in path.parts:
-                raise ValueError(f"Unsafe VSIX entry: {name}")
-            if name.startswith(("extension/build/", "extension/native/", "extension/.venv/")):
-                raise ValueError(f"Build or SDK files leaked into the VSIX: {name}")
-            if path.name == "genai_config.json" or ".onnx" in path.name:
-                raise ValueError(f"Model data leaked into the VSIX: {name}")
-            if name.startswith("extension/runtime/") and not name.endswith("/"):
-                relative = name.removeprefix("extension/runtime/")
-                if not any(fnmatch.fnmatchcase(relative, pattern) for pattern in allowed):
-                    raise ValueError(f"Unexpected native bundle file: {name}")
-                runtime.append(name)
+        runtime = verify_entries(names, allowed)
         xml = ET.fromstring(archive.read("extension.vsixmanifest"))
         identity = next(element for element in xml.iter() if element.tag.endswith("}Identity"))
         if identity.attrib.get("TargetPlatform") != target:

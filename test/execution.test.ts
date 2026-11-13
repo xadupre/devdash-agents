@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   chmod,
   mkdir,
@@ -23,7 +24,15 @@ import {
   type MachineConfiguration,
   type WorkerConfiguration,
 } from "../src/execution";
-import { parseApplicationMessage, AgentApplication } from "../src/application";
+import {
+  parseApplicationMessage,
+  AgentApplication,
+  type ApplicationState,
+} from "../src/application";
+import {
+  CopilotWorkerMonitor,
+  stopCopilotWorker,
+} from "../src/copilot-workers";
 import { ApplicationStorage } from "../src/storage";
 import { CopilotConversation } from "../src/conversation";
 import {
@@ -330,6 +339,173 @@ test("session assignments reach factories and survive disk persistence, New and 
   );
 });
 
+test("resuming legacy sessions adopts the selected assignment without retargeting open or assigned sessions", async (t) => {
+  const applications: AgentApplication[] = [];
+  const root = await directory(t, applications);
+  const repository = join(root, "alpha");
+  await mkdir(join(repository, ".git"), { recursive: true });
+  await writeFile(join(repository, "scenario"), "persist");
+  for (const id of ["current", "archived", "bound"])
+    await writeFile(join(repository, `history-${id}.json`), "[]");
+  const selected = assignSession(config, "copilot", "gpu");
+  const savedAssignment = assignSession(config, "copilot", "local");
+  const received: unknown[] = [];
+  const create = (): AgentApplication => {
+    const application = new AgentApplication(
+      root,
+      (repo, _request, _view, binding) => {
+        received.push(binding);
+        return new CopilotConversation({
+          cliPath: join(__dirname, "fixtures", "copilot.js"),
+          workingDirectory: repo.path,
+          timeoutMs: 5000,
+        });
+      },
+      () => {},
+      {
+        version: 1,
+        root,
+        sessions: [
+          {
+            id: repository,
+            backend: "copilot",
+            sessionId: "current",
+            draft: "",
+            messages: [],
+            history: [
+              {
+                backend: "copilot",
+                sessionId: "archived",
+                draft: "",
+                messages: [],
+              },
+              {
+                backend: "copilot",
+                sessionId: "bound",
+                assignment: savedAssignment,
+                draft: "",
+                messages: [],
+              },
+            ],
+          },
+        ],
+      },
+    );
+    applications.push(application);
+    return application;
+  };
+  const application = create();
+  await application.refresh();
+  await application.resumeSession(repository, "current", selected);
+  assert.deepEqual(received.at(-1), selected);
+  await application.resumeSession(repository, "archived", selected);
+  assert.deepEqual(received.at(-1), selected);
+  await application.resumeSession(repository, "bound", selected);
+  assert.deepEqual(received.at(-1), savedAssignment);
+
+  const alreadyOpen = create();
+  await alreadyOpen.refresh();
+  await alreadyOpen.openSession(repository);
+  assert.equal(received.at(-1), undefined);
+  const starts = received.length;
+  await alreadyOpen.resumeSession(repository, "current", selected);
+  assert.equal(received.length, starts);
+  assert.equal(alreadyOpen.getAssignment(repository), undefined);
+});
+
+test("Copilot worker groups preserve saved bindings and stop only while still idle", async () => {
+  const first = assignSession(config, "copilot", "local");
+  const second = assignSession(config, "copilot", "gpu");
+  const changed = structuredClone(first);
+  changed.worker.model.source = "different-model";
+  const slot = (assignment: typeof first) => ({
+    view: "copilot" as const,
+    backend: "copilot" as const,
+    status: "ready" as const,
+    open: true,
+    generation: 0,
+    assignment,
+  });
+  const state: ApplicationState = {
+    root: "/",
+    repositories: [
+      {
+        id: "a",
+        name: "a",
+        path: "/a",
+        status: "ready",
+        sessions: [slot(first)],
+      },
+      {
+        id: "b",
+        name: "b",
+        path: "/b",
+        status: "ready",
+        sessions: [slot(first)],
+      },
+      {
+        id: "c",
+        name: "c",
+        path: "/c",
+        status: "ready",
+        sessions: [slot(second)],
+      },
+      {
+        id: "d",
+        name: "d",
+        path: "/d",
+        status: "ready",
+        sessions: [slot(changed)],
+      },
+    ],
+    messages: [],
+    draft: "",
+    permissions: [],
+    questions: [],
+  };
+  const monitor = new CopilotWorkerMonitor();
+  let timeout = 1;
+  const snapshots = () => monitor.snapshots(state, timeout);
+  const rows = snapshots();
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0]!.sessions.length, 2);
+  assert.notEqual(rows[0]!.groupId, rows[1]!.groupId);
+  assert.notEqual(rows[0]!.groupId, rows[2]!.groupId);
+  assert.equal(rows[1]!.machineName, second.workerMachine.name);
+  await delay(5);
+
+  for (const idleOnly of [false, true]) {
+    state.repositories[0]!.sessions![0]!.open = true;
+    state.repositories[1]!.sessions![0]!.status = "ready";
+    snapshots();
+    await delay(5);
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const started = new Promise<void>((resolve) => (entered = resolve));
+    const closed: string[] = [];
+    const stopping = stopCopilotWorker(
+      rows[0]!.groupId,
+      idleOnly,
+      snapshots,
+      async (id) => {
+        closed.push(id);
+        state.repositories[0]!.sessions![0]!.open = false;
+        entered();
+        await gate;
+      },
+      () => {},
+    );
+    await started;
+    if (idleOnly) timeout = 0;
+    else state.repositories[1]!.sessions![0]!.status = "busy";
+    release();
+    await stopping;
+    assert.deepEqual(closed, ["a"]);
+    timeout = 1;
+  }
+});
+
 test("deleting many archived sessions reuses one CLI per worker assignment", async (t) => {
   const applications: AgentApplication[] = [];
   const root = await directory(t, applications);
@@ -452,12 +628,11 @@ test(
       signal,
     );
     assert.equal(prepared, await realpath(source));
-    const uploaded = await uploadRemoteModel(
-      machine,
-      source,
-      "catalogue-id",
-      signal,
-    );
+    const [uploaded, concurrent] = await Promise.all([
+      uploadRemoteModel(machine, source, "catalogue-id", signal),
+      uploadRemoteModel(machine, source, "catalogue-id", signal),
+    ]);
+    assert.equal(concurrent, uploaded);
     assert.equal(
       await readFile(join(uploaded, "weights.onnx"), "utf8"),
       "weights",
@@ -465,6 +640,20 @@ test(
     assert.equal(
       await uploadRemoteModel(machine, source, "catalogue-id", signal),
       uploaded,
+    );
+    const conflicting = join(
+      machine.modelsPath,
+      `foundry-${createHash("sha256").update("incomplete").digest("hex").slice(0, 24)}`,
+    );
+    await mkdir(conflicting);
+    await writeFile(join(conflicting, "unfinished"), "keep");
+    await assert.rejects(
+      uploadRemoteModel(machine, source, "incomplete", signal),
+      /Could not publish uploaded model/,
+    );
+    assert.equal(
+      await readFile(join(conflicting, "unfinished"), "utf8"),
+      "keep",
     );
     const inspected = await inspectRemoteModel(
       { command: connection, modelPath: uploaded },
@@ -500,6 +689,7 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 printf '%s\\n' "$arguments" > "$output/build-arguments"
+sleep 0.2
 printf '{}' > "$output/genai_config.json"
 `,
     );
@@ -510,12 +700,11 @@ printf '{}' > "$output/genai_config.json"
       command: `env "PATH=${bin}:${process.env.PATH}" ${connection}`,
     };
     const signal = AbortSignal.timeout(10_000);
-    const exported = await prepareRemoteModel(
-      machine,
-      worker,
-      worker.model.source,
-      signal,
-    );
+    const [exported, concurrent] = await Promise.all([
+      prepareRemoteModel(machine, worker, worker.model.source, signal),
+      prepareRemoteModel(machine, worker, worker.model.source, signal),
+    ]);
+    assert.equal(concurrent, exported);
     assert.equal(exported.startsWith(await realpath(machine.modelsPath)), true);
     const args = await readFile(join(exported, "build-arguments"), "utf8");
     assert.match(args, /-m\nQwen\/Qwen3-0.6B\n/);
@@ -715,14 +904,14 @@ test("stop-local-worker messages name one host", () => {
       parseApplicationMessage({ type: "stop-local-worker", hostId: "../x" }),
     /local model host/,
   );
-  for (const workerId of ["copilot-gpu", ""])
+  for (const groupId of ["a".repeat(64), "b".repeat(64)])
     assert.deepEqual(
-      parseApplicationMessage({ type: "stop-copilot-worker", workerId }),
-      { type: "stop-copilot-worker", workerId },
+      parseApplicationMessage({ type: "stop-copilot-worker", groupId }),
+      { type: "stop-copilot-worker", groupId },
     );
   assert.throws(
     () =>
-      parseApplicationMessage({ type: "stop-copilot-worker", workerId: "a/b" }),
+      parseApplicationMessage({ type: "stop-copilot-worker", groupId: "a/b" }),
     /Copilot worker/,
   );
 });

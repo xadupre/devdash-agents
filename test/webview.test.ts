@@ -5472,7 +5472,7 @@ test("the worker table lists running workers and stops idle ones on demand", asy
         type: "copilot-workers",
         workers: [
           {
-            workerId: "copilot-gpu",
+            groupId: "a".repeat(64),
             workerName: "Copilot @ GPU",
             machineName: "GPU host",
             model: "CLI default",
@@ -5480,7 +5480,7 @@ test("the worker table lists running workers and stops idle ones on demand", asy
             busy: false,
           },
           {
-            workerId: "",
+            groupId: "b".repeat(64),
             workerName: "Copilot (no worker)",
             machineName: "This computer",
             model: "gpt",
@@ -5511,7 +5511,7 @@ test("the worker table lists running workers and stops idle ones on demand", asy
   copilotRows[0]!.querySelector("button")!.click();
   assert.deepEqual(posted.at(-1), {
     type: "stop-copilot-worker",
-    workerId: "copilot-gpu",
+    groupId: "a".repeat(64),
   });
   dom.window.dispatchEvent(
     new dom.window.MessageEvent("message", {
@@ -5577,6 +5577,8 @@ test("the session dialog chooses the worker, its machine and the harness machine
     "#assignment-harness-machine",
   )!;
   const summary = document.querySelector<HTMLElement>("#assignment-summary")!;
+  const invoker = document.querySelector<HTMLButtonElement>("#refresh")!;
+  invoker.focus();
   assert.equal(dialog.hidden, true);
   send({
     type: "choose-assignment",
@@ -5584,6 +5586,32 @@ test("the session dialog chooses the worker, its machine and the harness machine
     repositoryId: "/src/alpha",
   });
   assert.equal(dialog.hidden, false);
+  assert.equal(document.activeElement, worker);
+  assert.equal(
+    document.querySelector("main.application")!.hasAttribute("inert"),
+    true,
+  );
+  const cancel =
+    document.querySelector<HTMLButtonElement>("#assignment-cancel")!;
+  worker.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", {
+      key: "Tab",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  assert.equal(document.activeElement, cancel);
+  cancel.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  assert.equal(document.activeElement, worker);
+  invoker.focus();
+  assert.equal(document.activeElement, worker);
   assert.equal(worker.options.length, 2);
   // Copilot follows the harness machine.
   assert.equal(workerMachine.disabled, true);
@@ -5618,6 +5646,11 @@ test("the session dialog chooses the worker, its machine and the harness machine
     },
   ]);
   assert.equal(dialog.hidden, true);
+  assert.equal(document.activeElement, invoker);
+  assert.equal(
+    document.querySelector("main.application")!.hasAttribute("inert"),
+    false,
+  );
   send({
     type: "choose-assignment",
     requestId: "r2",

@@ -3,9 +3,9 @@ import { randomUUID } from "node:crypto";
 import {
   AgentApplication,
   parseApplicationMessage,
-  type CopilotWorkerSnapshot,
   type LocalSessionSetup,
 } from "./application";
+import { CopilotWorkerMonitor, stopCopilotWorker } from "./copilot-workers";
 import { CopilotConversation } from "./conversation";
 import {
   ConversationRenderer,
@@ -59,6 +59,7 @@ import {
 } from "./local-model-host";
 import {
   MemoryMonitor,
+  currentMemorySample,
   remoteMemory,
   type MemoryUpdate,
 } from "./system-memory";
@@ -315,6 +316,10 @@ export function activate(context: vscode.ExtensionContext): void {
     // Hosts are shared only between sessions targeting the same machine.
     const hostMachines = new WeakMap<LocalModelHost, string>();
     const hostWorkers = new WeakMap<LocalModelHost, string>();
+    const hostAssignments = new WeakMap<
+      LocalModelHost,
+      Pick<SessionAssignment, "worker" | "workerMachine">
+    >();
     const localModelInfo = new Map<
       string,
       Awaited<ReturnType<typeof inspectLocalModel>>
@@ -414,82 +419,28 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       })());
     let panel: vscode.WebviewPanel | undefined;
-    // Copilot CLI processes have no host object; idleness is derived from session state.
-    const copilotIdleSince = new Map<string, number>();
-    const copilotWorkers = (
-      state = application.getState(),
-    ): CopilotWorkerSnapshot[] => {
-      const now = Date.now();
-      const timeout = workerIdleMinutes() * 60_000;
-      const rows = new Map<
-        string,
-        CopilotWorkerSnapshot & { idleSince: number }
-      >();
-      const seen = new Set<string>();
-      for (const repository of state.repositories)
-        for (const slot of repository.sessions ?? []) {
-          if (slot.backend !== "copilot" || !slot.open) continue;
-          const key = `${repository.id}\n${slot.view}`;
-          seen.add(key);
-          const busy = slot.status !== "ready" && slot.status !== "error";
-          if (busy) copilotIdleSince.delete(key);
-          else if (!copilotIdleSince.has(key)) copilotIdleSince.set(key, now);
-          const assignment = slot.assignment;
-          const workerId = assignment?.worker.id ?? "";
-          const row = rows.get(workerId) ?? {
-            workerId,
-            workerName: assignment?.worker.name ?? "Copilot (no worker)",
-            machineName: assignment?.workerMachine.name ?? "This computer",
-            model:
-              slot.model ?? (assignment?.worker.model.source || "CLI default"),
-            sessions: [],
-            busy: false,
-            idleSince: 0,
-          };
-          row.sessions.push({ repositoryId: repository.id, view: slot.view });
-          row.busy ||= busy;
-          row.idleSince = Math.max(
-            row.idleSince,
-            copilotIdleSince.get(key) ?? now,
-          );
-          rows.set(workerId, row);
-        }
-      for (const key of copilotIdleSince.keys())
-        if (!seen.has(key)) copilotIdleSince.delete(key);
-      return [...rows.values()].map(({ idleSince, ...row }) => ({
-        ...row,
-        ...(!row.busy && timeout ? { idleStopAt: idleSince + timeout } : {}),
-      }));
-    };
-    const stopCopilotWorker = async (
-      workerId: string,
-      idleOnly = false,
-    ): Promise<void> => {
-      const row = copilotWorkers().find((entry) => entry.workerId === workerId);
-      if (!row) throw new Error("The Copilot worker is no longer running.");
-      if (row.busy)
-        throw new Error(
-          "Wait for the Copilot worker's running requests to finish.",
-        );
-      if (
-        idleOnly &&
-        (row.idleStopAt === undefined || row.idleStopAt > Date.now())
-      )
-        return;
-      logEvent(
-        `${row.workerName} @ ${row.machineName}`,
-        idleOnly
-          ? `Idle for ${workerIdleMinutes()} min; closing ${row.sessions.length} Copilot session(s) to free memory.`
-          : `Stop requested; closing ${row.sessions.length} Copilot session(s).`,
+    const copilotMonitor = new CopilotWorkerMonitor();
+    const copilotWorkers = (state = application.getState()) =>
+      copilotMonitor.snapshots(state, workerIdleMinutes() * 60_000);
+    const stopCopilotGroup = (groupId: string, idleOnly = false) =>
+      stopCopilotWorker(
+        groupId,
+        idleOnly,
+        () => copilotWorkers(),
+        (id, view) => application.closeSession(id, view),
+        (row) =>
+          logEvent(
+            `${row.workerName} @ ${row.machineName}`,
+            idleOnly
+              ? `Idle for ${workerIdleMinutes()} min; closing ${row.sessions.length} Copilot session(s) to free memory.`
+              : `Stop requested; closing ${row.sessions.length} Copilot session(s).`,
+          ),
       );
-      for (const session of row.sessions)
-        await application.closeSession(session.repositoryId, session.view);
-    };
     const copilotIdleTimer = setInterval(() => {
       if (stopping) return;
       for (const row of copilotWorkers())
         if (row.idleStopAt !== undefined && row.idleStopAt <= Date.now())
-          void stopCopilotWorker(row.workerId, true).catch(() => {});
+          void stopCopilotGroup(row.groupId, true).catch(report);
     }, 30_000);
     copilotIdleTimer.unref?.();
     lifetime.signal.addEventListener("abort", () =>
@@ -514,22 +465,17 @@ export function activate(context: vscode.ExtensionContext): void {
           ),
         },
       });
-      const config = localHosts.size ? executionConfiguration() : undefined;
       void panel.webview.postMessage({
         type: "local-models",
         models: [...localHosts].map(([id, host]) => {
-          const worker = config?.workers.find(
-            (entry) => entry.id === hostWorkers.get(host),
-          );
+          const assignment = hostAssignments.get(host);
           const machine = hostMachines.get(host) ?? "";
           return {
             ...host.snapshot(),
             id,
-            ...(worker ? { workerName: worker.name } : {}),
-            machineName: machine
-              ? (config?.machines.find((entry) => entry.id === machine)?.name ??
-                machine)
-              : "This computer",
+            ...(assignment ? { workerName: assignment.worker.name } : {}),
+            machineName:
+              assignment?.workerMachine.name ?? (machine || "This computer"),
           };
         }),
       });
@@ -563,15 +509,22 @@ export function activate(context: vscode.ExtensionContext): void {
       string,
       { at: number; sample: Promise<MemoryUpdate> }
     >();
-    const sampleMemory = (): Promise<MemoryUpdate> => {
-      const assignment = application.activeAssignment();
+    const sampleMemory = (
+      assignment: SessionAssignment | undefined,
+    ): Promise<MemoryUpdate> => {
       const machine = assignment?.workerMachine;
       const deviceId =
         assignment?.worker.provider === "cuda"
           ? assignment.worker.deviceId
           : undefined;
       const withDevice = (update: MemoryUpdate): MemoryUpdate =>
-        deviceId === undefined ? update : { ...update, deviceId };
+        machine?.command || deviceId !== undefined
+          ? {
+              ...update,
+              ...(machine?.command ? { machine: machine.name } : {}),
+              ...(deviceId === undefined ? {} : { deviceId }),
+            }
+          : update;
       if (!machine?.command) return memoryMonitor.sample().then(withDevice);
       // Each sample opens a connection, so remote machines are sampled less often.
       const cached = remoteMemorySamples.get(machine.command);
@@ -584,11 +537,24 @@ export function activate(context: vscode.ExtensionContext): void {
       remoteMemorySamples.set(machine.command, { at: Date.now(), sample });
       return sample.then(withDevice);
     };
+    let memorySequence = 0;
     const publishMemory = (): void => {
       if (!panel?.visible || stopping) return;
-      void sampleMemory().then(
-        (update) => panel && void panel.webview.postMessage(update),
-        () => undefined,
+      const sequence = ++memorySequence;
+      void currentMemorySample(
+        () => application.activeAssignment(),
+        sampleMemory,
+      ).then(
+        (update) => {
+          if (
+            update &&
+            sequence === memorySequence &&
+            panel?.visible &&
+            !stopping
+          )
+            void panel.webview.postMessage(update);
+        },
+        (error: unknown) => report(error),
       );
     };
     const memoryTimer = setInterval(publishMemory, 5000);
@@ -830,6 +796,7 @@ export function activate(context: vscode.ExtensionContext): void {
       /** Worker path on the remote machine, to relaunch it with other variables. */
       remote?: { machine: RemoteMachine; executable: string };
       workerId?: string;
+      assignment?: Pick<SessionAssignment, "worker" | "workerMachine">;
     }
     const remoteWorkers = new Map<string, Promise<string>>();
     const workerLaunch = async (
@@ -985,6 +952,7 @@ export function activate(context: vscode.ExtensionContext): void {
       localHosts.set(hostId, host);
       hostMachines.set(host, launch.machine);
       if (launch.workerId) hostWorkers.set(host, launch.workerId);
+      if (launch.assignment) hostAssignments.set(host, launch.assignment);
       initialPlacements.set(host, { provider, deviceId });
       return host;
     };
@@ -1202,11 +1170,16 @@ export function activate(context: vscode.ExtensionContext): void {
             modelInfo = cached ?? (await inspectLocalModel(modelPath));
             localModelInfo.set(modelPath, modelInfo);
           }
-          if (assignment)
+          if (assignment) {
             launch.workerId = JSON.stringify([
               assignment.worker,
               assignment.workerMachine,
             ]);
+            launch.assignment = {
+              worker: assignment.worker,
+              workerMachine: assignment.workerMachine,
+            };
+          }
           if (stopping || !panel)
             throw new Error("The application is closing.");
           placement = await resolveLocalPlacement(launch, provider, deviceId);
@@ -1449,6 +1422,10 @@ export function activate(context: vscode.ExtensionContext): void {
             localDevices = undefined;
             localDevicesStatus = "idle";
             localDevicesError = undefined;
+          }
+          if (event.affectsConfiguration("devdashAgents.workerIdleMinutes")) {
+            for (const host of localHosts.values()) host.refreshIdleTimeout();
+            publish();
           }
           publishSettings();
         }
@@ -1781,7 +1758,7 @@ export function activate(context: vscode.ExtensionContext): void {
               );
               break;
             case "stop-copilot-worker":
-              await stopCopilotWorker(message.workerId);
+              await stopCopilotGroup(message.groupId);
               break;
             case "stop-local-worker": {
               const host = localHosts.get(message.hostId);

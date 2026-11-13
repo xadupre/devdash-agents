@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   findLocalModelHost,
   LocalModelHost,
@@ -787,6 +788,43 @@ test("idle workers stop after the timeout, busy ones never, and Stop frees memor
   await session.generateChat([], () => {}, undefined, 64);
   assert.equal(host.snapshot().idleStopAt, undefined, "0 disables the timeout");
   await session.stop();
+});
+
+test("changing the idle timeout cancels and rearms an already idle worker", async (t) => {
+  const worker = new Worker();
+  let timeout = 100;
+  const host = new LocalModelHost(
+    "/model",
+    { provider: "cpu", deviceId: 0 },
+    () => worker,
+    () => {},
+    () => {},
+    undefined,
+    () => timeout,
+  );
+  const session = host.attach("repo");
+  t.after(() => session.stop());
+  await session.generateChat([], () => {});
+  const firstDeadline = host.snapshot().idleStopAt!;
+  timeout = 500;
+  host.refreshIdleTimeout();
+  assert.equal(host.snapshot().idleStopAt, firstDeadline + 400);
+  timeout = 0;
+  host.refreshIdleTimeout();
+  assert.equal(host.snapshot().idleStopAt, undefined);
+  await delay(150);
+  assert.equal(worker.stops, 0);
+  const stopped = deferred();
+  worker.stopStarted = stopped.resolve;
+  timeout = 1;
+  host.refreshIdleTimeout();
+  await Promise.race([
+    stopped.promise,
+    delay(3000).then(() => {
+      throw new Error("Idle worker was not stopped");
+    }),
+  ]);
+  assert.equal(worker.stops, 1);
 });
 
 test("reports worker load, idle stop and failure events", async () => {
