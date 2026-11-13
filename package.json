@@ -197,9 +197,6 @@
     "@github/copilot-sdk": {
       "zod": "^4.6.7"
     },
-    "@vscode/vsce": {
-      "@azure/identity": "4.13.0"
-    },
     "@vscode/markdown-it-katex": {
       "katex": "^0.19.1"
     },
