@@ -1122,6 +1122,7 @@ export function activate(context: vscode.ExtensionContext): void {
       async (value: unknown) => {
         let repositoryId: string | undefined;
         let harnessSettingsRequestId: number | undefined;
+        let executionConfigurationRequestId: string | undefined;
         const datasetAction =
           value !== null &&
           typeof value === "object" &&
@@ -1144,6 +1145,17 @@ export function activate(context: vscode.ExtensionContext): void {
           value.requestId > 0
         )
           harnessSettingsRequestId = value.requestId;
+        if (
+          value !== null &&
+          typeof value === "object" &&
+          "type" in value &&
+          value.type === "execution-configuration" &&
+          "requestId" in value &&
+          typeof value.requestId === "string" &&
+          value.requestId.length > 0 &&
+          value.requestId.length <= 100
+        )
+          executionConfigurationRequestId = value.requestId;
         try {
           const message = parseApplicationMessage(value);
           if (message.type === "github-comment") commentRequest = message;
@@ -1365,6 +1377,18 @@ export function activate(context: vscode.ExtensionContext): void {
               };
               savingConfiguration = savingConfiguration.then(save, save);
               await savingConfiguration;
+              const saved = executionConfiguration();
+              if (
+                JSON.stringify(saved) !== JSON.stringify(message.configuration)
+              )
+                throw new Error(
+                  "Machine and worker settings are overridden by another VS Code configuration scope.",
+                );
+              await panel?.webview.postMessage({
+                type: "execution-configuration-saved",
+                requestId: message.requestId,
+                configuration: saved,
+              });
               break;
             }
             case "local-device": {
@@ -1858,6 +1882,7 @@ export function activate(context: vscode.ExtensionContext): void {
           ) {
             await panel.webview.postMessage({
               type: "execution-configuration-error",
+              requestId: executionConfigurationRequestId,
               message,
             });
           } else if (panel && datasetAction) {

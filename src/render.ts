@@ -349,14 +349,15 @@ export function renderApplication(resources: {
         <label for="machine-entry">Edit machine</label>
         <select id="machine-entry"><option value="">Add a remote machine</option></select>
         <form id="machine-configuration">
-          <label for="machine-id">Identifier (stable, unique)</label><input id="machine-id" required pattern="[A-Za-z0-9_-]{1,100}" maxlength="100">
+          <label for="machine-id">Identifier (stable, unique)</label><input id="machine-id" required pattern="[A-Za-z0-9_\\-]{1,100}" maxlength="100">
           <label for="machine-name">Display name</label><input id="machine-name" required maxlength="100">
           <label for="machine-command">Connection command (empty for local)</label><input id="machine-command" maxlength="4096" placeholder="ssh user@host">
-          <label for="machine-repositories">Repositories directory</label><input id="machine-repositories" required maxlength="4096">
-          <label for="machine-models">Models storage directory</label><input id="machine-models" required maxlength="4096">
+          <label for="machine-repositories">Repositories directory (absolute path)</label><input id="machine-repositories" required maxlength="4096">
+          <label for="machine-models">Models storage directory (absolute path)</label><input id="machine-models" required maxlength="4096">
           <label for="machine-worker">Native worker executable</label><input id="machine-worker" required maxlength="4096" value="devdash-genai-worker">
           <label for="machine-copilot">Copilot CLI executable</label><input id="machine-copilot" required maxlength="4096" value="copilot">
-          <button type="submit">Save machine</button><button id="delete-machine" type="button" disabled>Delete machine</button>
+          <button id="save-machine" type="submit">Save machine</button><button id="delete-machine" type="button" disabled>Delete machine</button>
+          <p id="machine-configuration-status"></p>
         </form>
       </section>
       <section class="settings-group" aria-labelledby="workers-title">
@@ -364,7 +365,7 @@ export function renderApplication(resources: {
         <p class="repository-hint">Each worker has exactly one model. Add a session to choose its worker and execution machine independently. Copilot runs on its execution machine. Existing sessions keep their saved assignment when Settings change.</p>
         <label for="worker-entry">Edit worker</label><select id="worker-entry"><option value="">Add a worker</option></select>
         <form id="worker-configuration">
-          <label for="worker-id">Identifier (stable, unique)</label><input id="worker-id" required pattern="[A-Za-z0-9_-]{1,100}" maxlength="100">
+          <label for="worker-id">Identifier (stable, unique)</label><input id="worker-id" required pattern="[A-Za-z0-9_\\-]{1,100}" maxlength="100">
           <label for="worker-name">Display name</label><input id="worker-name" required maxlength="100">
           <label for="worker-machine">Worker machine</label><select id="worker-machine"></select>
           <label for="worker-kind">Model source</label>
@@ -380,7 +381,7 @@ export function renderApplication(resources: {
           <label for="worker-provider">Device</label><select id="worker-provider"><option value="cpu">CPU</option><option value="cuda">CUDA</option></select>
           <label for="worker-device">Device index</label><input id="worker-device" type="number" min="0" step="1" value="0" required>
           <p class="repository-hint">Relative file/checkpoint paths use the worker machine's models directory. Files need their GenAI or Transformers configuration, weights and tokenizer alongside them; standalone ONNX and GGUF are not supported. Checkpoints and model IDs are exported on the worker machine using Python model-builder dependencies. Foundry packages are downloaded then streamed to remote storage if needed.</p>
-          <button type="submit">Save worker</button><button id="delete-worker" type="button" disabled>Delete worker</button>
+          <button id="save-worker" type="submit">Save worker</button><button id="delete-worker" type="button" disabled>Delete worker</button>
         </form>
         <p id="execution-configuration-status" role="status"></p>
       </section>

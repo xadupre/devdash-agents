@@ -765,19 +765,70 @@ declare function acquireVsCodeApi(): {
   const workerSource = element("worker-source", HTMLInputElement);
   const workerProvider = element("worker-provider", HTMLSelectElement);
   const workerDevice = element("worker-device", HTMLInputElement);
+  const saveMachine = element("save-machine", HTMLButtonElement);
+  const saveWorker = element("save-worker", HTMLButtonElement);
   const deleteMachine = element("delete-machine", HTMLButtonElement);
   const deleteWorker = element("delete-worker", HTMLButtonElement);
+  const machineConfigurationStatus = element(
+    "machine-configuration-status",
+    HTMLElement,
+  );
   const executionConfigurationStatus = element(
     "execution-configuration-status",
     HTMLElement,
   );
+  let executionConfigurationState:
+    "idle" | "saving" | "saved" | "dirty" | "error" = "idle";
+  let executionEditVersion = 0;
+  let savingExecutionEditVersion = 0;
+  let pendingExecutionSave:
+    | { requestId: string; label: "Machine settings" | "Worker settings" }
+    | undefined;
+  const setExecutionConfigurationStatus = (
+    message: string,
+    status: typeof executionConfigurationState = "idle",
+  ): void => {
+    executionConfigurationState = status;
+    machineConfigurationStatus.textContent = message;
+    executionConfigurationStatus.textContent = message;
+  };
+  const updateExecutionConfigurationControls = (): void => {
+    const saving = executionConfigurationState === "saving";
+    machineEntry.disabled = saving;
+    workerEntry.disabled = saving;
+    saveMachine.disabled = saving;
+    saveWorker.disabled = saving;
+    deleteMachine.disabled =
+      saving || !machineEntry.value || machineEntry.value === "local";
+    deleteWorker.disabled = saving || !workerEntry.value;
+  };
+  const noteExecutionEdit = (): void => {
+    executionEditVersion++;
+    if (executionConfigurationState === "saved")
+      setExecutionConfigurationStatus(
+        "Machine or worker changes are unsaved.",
+        "dirty",
+      );
+  };
   const saveExecutionConfiguration = (
     configuration: ExecutionConfiguration,
+    label: "Machine settings" | "Worker settings",
   ): void => {
-    executionConfigurationStatus.textContent = "Saving machines and workers...";
-    vscode.postMessage({ type: "execution-configuration", configuration });
+    if (executionConfigurationState === "saving") return;
+    const requestId = crypto.randomUUID();
+    pendingExecutionSave = { requestId, label };
+    savingExecutionEditVersion = executionEditVersion;
+    setExecutionConfigurationStatus("Saving machines and workers...", "saving");
+    updateExecutionConfigurationControls();
+    vscode.postMessage({
+      type: "execution-configuration",
+      requestId,
+      configuration,
+    });
   };
-  machineEntry.addEventListener("change", () => {
+  let machineEditorInitialized = false;
+  let machineEditorTouched = false;
+  const fillMachineForm = (): void => {
     const machine = settingsState?.execution?.machines.find(
       (entry) => entry.id === machineEntry.value,
     );
@@ -794,12 +845,33 @@ declare function acquireVsCodeApi(): {
             : "");
     machineFields.id.readOnly = !!machine;
     machineFields.command.readOnly = machine?.id === "local";
-    deleteMachine.disabled = !machine || machine.id === "local";
+    updateExecutionConfigurationControls();
+  };
+  const noteMachineEdit = (): void => {
+    machineEditorTouched = true;
+    noteExecutionEdit();
+  };
+  machineForm.addEventListener("input", noteMachineEdit);
+  machineForm.addEventListener("change", noteMachineEdit);
+  workerForm.addEventListener("input", noteExecutionEdit);
+  workerForm.addEventListener("change", noteExecutionEdit);
+  machineEntry.addEventListener("change", () => {
+    machineEditorTouched = true;
+    fillMachineForm();
+    if (executionConfigurationState === "error")
+      setExecutionConfigurationStatus("");
   });
   machineForm.addEventListener("submit", (event) => {
     event.preventDefault();
+    if (executionConfigurationState === "saving") return;
     const config = settingsState?.execution;
-    if (!config || !machineForm.reportValidity()) return;
+    if (!config) {
+      setExecutionConfigurationStatus(
+        "Machines and workers are still loading.",
+      );
+      return;
+    }
+    if (!machineForm.reportValidity()) return;
     const machine: MachineConfiguration = {
       id: machineFields.id.value.trim(),
       name: machineFields.name.value.trim(),
@@ -813,35 +885,48 @@ declare function acquireVsCodeApi(): {
       !machineEntry.value &&
       config.machines.some((entry) => entry.id === machine.id)
     ) {
-      executionConfigurationStatus.textContent =
-        "Choose a unique machine identifier; the host/connection may be repeated.";
+      setExecutionConfigurationStatus(
+        machine.id === "local"
+          ? "The local machine already exists; select it in Edit machine."
+          : "Choose a unique machine identifier; the host/connection may be repeated.",
+        "error",
+      );
       return;
     }
-    saveExecutionConfiguration({
-      ...config,
-      machines: [
-        ...config.machines.filter((entry) => entry.id !== machine.id),
-        machine,
-      ],
-    });
+    saveExecutionConfiguration(
+      {
+        ...config,
+        machines: [
+          ...config.machines.filter((entry) => entry.id !== machine.id),
+          machine,
+        ],
+      },
+      "Machine settings",
+    );
   });
   deleteMachine.addEventListener("click", () => {
+    if (executionConfigurationState === "saving") return;
     const config = settingsState?.execution;
     if (!config || !machineEntry.value || machineEntry.value === "local")
       return;
     if (
       config.workers.some((worker) => worker.machineId === machineEntry.value)
     ) {
-      executionConfigurationStatus.textContent =
-        "Delete or reassign this machine's workers first.";
+      setExecutionConfigurationStatus(
+        "Delete or reassign this machine's workers first.",
+        "error",
+      );
       return;
     }
-    saveExecutionConfiguration({
-      ...config,
-      machines: config.machines.filter(
-        (entry) => entry.id !== machineEntry.value,
-      ),
-    });
+    saveExecutionConfiguration(
+      {
+        ...config,
+        machines: config.machines.filter(
+          (entry) => entry.id !== machineEntry.value,
+        ),
+      },
+      "Machine settings",
+    );
   });
   const updateWorkerKind = (): void => {
     const copilot = workerKind.value === "copilot";
@@ -879,19 +964,24 @@ declare function acquireVsCodeApi(): {
     workerSource.value = worker?.model.source ?? "";
     workerProvider.value = worker?.provider ?? "cpu";
     workerDevice.value = String(worker?.deviceId ?? 0);
-    deleteWorker.disabled = !worker;
+    updateExecutionConfigurationControls();
     updateWorkerKind();
+    if (executionConfigurationState === "error")
+      setExecutionConfigurationStatus("");
   });
   workerForm.addEventListener("submit", (event) => {
     event.preventDefault();
+    if (executionConfigurationState === "saving") return;
     const config = settingsState?.execution;
     if (!config || !workerForm.reportValidity()) return;
     if (
       !workerEntry.value &&
       config.workers.some((entry) => entry.id === workerId.value.trim())
     ) {
-      executionConfigurationStatus.textContent =
-        "Choose a unique worker identifier.";
+      setExecutionConfigurationStatus(
+        "Choose a unique worker identifier.",
+        "error",
+      );
       return;
     }
     const worker: WorkerConfiguration = {
@@ -906,25 +996,36 @@ declare function acquireVsCodeApi(): {
       provider: workerProvider.value as WorkerConfiguration["provider"],
       deviceId: Number(workerDevice.value),
     };
-    saveExecutionConfiguration({
-      ...config,
-      workers: [
-        ...config.workers.filter((entry) => entry.id !== worker.id),
-        worker,
-      ],
-    });
+    saveExecutionConfiguration(
+      {
+        ...config,
+        workers: [
+          ...config.workers.filter((entry) => entry.id !== worker.id),
+          worker,
+        ],
+      },
+      "Worker settings",
+    );
   });
   deleteWorker.addEventListener("click", () => {
+    if (executionConfigurationState === "saving") return;
     const config = settingsState?.execution;
     if (!config || !workerEntry.value) return;
-    saveExecutionConfiguration({
-      ...config,
-      workers: config.workers.filter((entry) => entry.id !== workerEntry.value),
-    });
+    saveExecutionConfiguration(
+      {
+        ...config,
+        workers: config.workers.filter(
+          (entry) => entry.id !== workerEntry.value,
+        ),
+      },
+      "Worker settings",
+    );
   });
   const renderExecutionConfiguration = (): void => {
     const config = settingsState?.execution;
     if (!config) return;
+    const initializeMachine =
+      !machineEditorInitialized && !machineEditorTouched;
     replaceOptions(
       machineEntry,
       [
@@ -934,8 +1035,10 @@ declare function acquireVsCodeApi(): {
           label: `${machine.name} (${machine.id})`,
         })),
       ],
-      machineEntry.value,
+      initializeMachine ? "local" : machineEntry.value,
     );
+    if (initializeMachine) fillMachineForm();
+    machineEditorInitialized = true;
     replaceOptions(
       workerEntry,
       [
@@ -956,7 +1059,11 @@ declare function acquireVsCodeApi(): {
       workerMachine.value || "local",
     );
     updateWorkerKind();
-    executionConfigurationStatus.textContent = `${config.machines.length} machine(s), ${config.workers.length} worker(s).`;
+    if (executionConfigurationState === "idle")
+      setExecutionConfigurationStatus(
+        `${config.machines.length} machine(s), ${config.workers.length} worker(s).`,
+      );
+    updateExecutionConfigurationControls();
   };
   type RemoteMachine = import("./remote").RemoteMachine;
   const executionMachine = element("execution-machine", HTMLSelectElement);
@@ -3289,7 +3396,16 @@ declare function acquireVsCodeApi(): {
             models: import("./local-model-host").LocalModelSnapshot[];
           }
         | { type: "error"; message: string; id?: string }
-        | { type: "execution-configuration-error"; message: string }
+        | {
+            type: "execution-configuration-error";
+            requestId?: string;
+            message: string;
+          }
+        | {
+            type: "execution-configuration-saved";
+            requestId: string;
+            configuration: ExecutionConfiguration;
+          }
         | {
             type: "dataset-sessions";
             sessions: DatasetSession[];
@@ -3318,8 +3434,37 @@ declare function acquireVsCodeApi(): {
     ) => {
       if (event.data.type === "state") {
         render(event.data.state);
+      } else if (event.data.type === "execution-configuration-saved") {
+        if (
+          executionConfigurationState !== "saving" ||
+          event.data.requestId !== pendingExecutionSave?.requestId
+        )
+          return;
+        const label = pendingExecutionSave.label;
+        pendingExecutionSave = undefined;
+        if (settingsState) {
+          settingsState = {
+            ...settingsState,
+            execution: event.data.configuration,
+          };
+          renderExecutionConfiguration();
+        }
+        const newerEdits = executionEditVersion !== savingExecutionEditVersion;
+        setExecutionConfigurationStatus(
+          newerEdits
+            ? `${label} saved; newer edits are unsaved.`
+            : `${label} saved.`,
+          newerEdits ? "dirty" : "saved",
+        );
+        updateExecutionConfigurationControls();
       } else if (event.data.type === "execution-configuration-error") {
-        executionConfigurationStatus.textContent = `Could not save machines and workers: ${event.data.message}`;
+        if (event.data.requestId !== pendingExecutionSave?.requestId) return;
+        pendingExecutionSave = undefined;
+        setExecutionConfigurationStatus(
+          `Could not save machines and workers: ${event.data.message}`,
+          "error",
+        );
+        updateExecutionConfigurationControls();
       } else if (event.data.type === "dataset-sessions") {
         renderDataset(event.data.sessions);
         if (event.data.saved) {

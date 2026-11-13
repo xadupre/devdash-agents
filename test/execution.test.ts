@@ -89,12 +89,22 @@ test("machines allow repeated connections and workers bind one model and device"
   assert.deepEqual(
     parseApplicationMessage({
       type: "execution-configuration",
+      requestId: "save-1",
       configuration: config,
     }),
     {
       type: "execution-configuration",
+      requestId: "save-1",
       configuration: config,
     },
+  );
+  assert.throws(
+    () =>
+      parseApplicationMessage({
+        type: "execution-configuration",
+        configuration: config,
+      }),
+    /configuration request/,
   );
   const assigned = assignSession(config, "inference", "local");
   assert.equal(assigned.workerMachine.id, "gpu");

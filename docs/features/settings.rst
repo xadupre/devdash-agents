@@ -16,13 +16,18 @@ the legacy defaults; those defaults remain available in the collapsible
 **Legacy defaults and Foundry catalogue browser** section.
 
 Keep exactly one machine with identifier ``local`` and an empty connection
-command. Every machine defines its absolute **Repositories directory** and
-**Models storage directory**, plus its native worker and Copilot CLI executables.
+command. The form initially edits that machine; select **Add a remote machine**
+to configure another one. Every machine defines its absolute **Repositories
+directory** and **Models storage directory**, plus its native worker and Copilot
+CLI executables.
 Other entries use a noninteractive connection command such as ``ssh user@host``
 or ``az ssh vm ...`` accepting ``--`` followed by a quoted remote command.
 Remote hosts require a POSIX shell and GNU utilities; local hosts also support
 Windows. Machine identifiers must be unique, but multiple entries may connect
 to the same physical host and use different directories.
+
+Save operations finish one at a time; the form reports success or any error
+next to the machine or worker settings.
 
 Each worker chooses one machine, exactly one model source, and **CPU** or
 **CUDA** with a device index. Model sources are:

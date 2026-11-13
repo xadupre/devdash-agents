@@ -269,7 +269,11 @@ export type ApplicationMessage =
     }
   | { type: "copilot-model"; model: string }
   | { type: "remote-machines"; machines: RemoteMachine[]; selected: string }
-  | { type: "execution-configuration"; configuration: ExecutionConfiguration }
+  | {
+      type: "execution-configuration";
+      requestId: string;
+      configuration: ExecutionConfiguration;
+    }
   | {
       type: "reduce-context";
       id: string;
@@ -345,8 +349,16 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
     throw new Error("Invalid application message.");
   }
   if (value.type === "execution-configuration") {
+    if (
+      !("requestId" in value) ||
+      typeof value.requestId !== "string" ||
+      !value.requestId ||
+      value.requestId.length > 100
+    )
+      throw new Error("Invalid execution configuration request.");
     return {
       type: "execution-configuration",
+      requestId: value.requestId,
       configuration: parseExecutionConfiguration(
         "configuration" in value ? value.configuration : undefined,
       ),
