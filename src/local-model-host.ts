@@ -51,7 +51,10 @@ export type LocalModelWorker = Pick<
 > &
   Partial<Pick<LocalWorker, "reduceContext">>;
 
-type WorkerFactory = (onClose: (error: Error) => void) => LocalModelWorker;
+type WorkerFactory = (
+  onClose: (error: Error) => void,
+  placement: LocalPlacement,
+) => LocalModelWorker;
 
 interface SessionState {
   repositoryId: string;
@@ -363,7 +366,7 @@ export class LocalModelHost {
         this.onEvent(this.error, "error");
         this.clearCaches();
         this.onChange();
-      });
+      }, this.placement);
       this.worker = worker;
       this.device = await worker.load(
         this.modelPath,

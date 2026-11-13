@@ -827,6 +827,8 @@ export function activate(context: vscode.ExtensionContext): void {
       machine: string;
       executable: string;
       args: string[];
+      /** Worker path on the remote machine, to relaunch it with other variables. */
+      remote?: { machine: RemoteMachine; executable: string };
       workerId?: string;
     }
     const remoteWorkers = new Map<string, Promise<string>>();
@@ -885,23 +887,55 @@ export function activate(context: vscode.ExtensionContext): void {
           if (remoteWorkers.get(key) === executable) remoteWorkers.delete(key);
         });
       }
+      const remoteExecutable = await executable;
       return {
         machine: remote.name,
-        ...remoteInvocation(remote, [await executable]),
+        ...remoteInvocation(remote, [remoteExecutable]),
+        remote: { machine: remote, executable: remoteExecutable },
       };
     };
     const startWorker = (
       launch: WorkerLaunch,
       timeoutMs?: number,
       onClose?: (error: Error) => void,
-    ): LocalWorker =>
-      new LocalWorker(
-        launch.executable,
-        launch.args,
+      placement?: LocalPlacement,
+    ): LocalWorker => {
+      // Some GenAI models (runtime_profiles) only load on CUDA device 0, so
+      // each model process sees only its GPU.
+      const cudaDevice =
+        placement?.provider === "cuda" && placement.deviceId >= 0
+          ? placement.deviceId
+          : undefined;
+      if (cudaDevice === undefined)
+        return new LocalWorker(
+          launch.executable,
+          launch.args,
+          timeoutMs,
+          onClose,
+          launch.machine !== "",
+        );
+      const visible = `CUDA_VISIBLE_DEVICES=${cudaDevice}`;
+      const { executable, args } = launch.remote
+        ? remoteInvocation(launch.remote.machine, [
+            "env",
+            visible,
+            launch.remote.executable,
+          ])
+        : launch;
+      return new LocalWorker(
+        executable,
+        args,
         timeoutMs,
         onClose,
         launch.machine !== "",
+        launch.remote
+          ? { cudaDevice }
+          : {
+              cudaDevice,
+              environment: { CUDA_VISIBLE_DEVICES: String(cudaDevice) },
+            },
       );
+    };
     const getLocalModelHost = (
       modelPath: string,
       launch: WorkerLaunch,
@@ -931,7 +965,8 @@ export function activate(context: vscode.ExtensionContext): void {
       const host = new LocalModelHost(
         modelPath,
         desired,
-        (onClose) => startWorker(launch, requestTimeout(), onClose),
+        (onClose, placement) =>
+          startWorker(launch, requestTimeout(), onClose, placement),
         publish,
         () => {
           if (localHosts.get(hostId) === host) localHosts.delete(hostId);

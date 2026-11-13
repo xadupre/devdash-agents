@@ -22,6 +22,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     id: string;
     method: string;
     modelPath?: string;
+    deviceId?: number;
     targetId?: string;
     session?: string;
   };
@@ -51,6 +52,19 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           code: "load_failed",
           message: "Invalid model",
         });
+      } else if (mode === "cuda-device-0") {
+        // Like GenAI models with runtime_profiles: only device 0 is accepted.
+        if (request.deviceId === 0 && process.env.CUDA_VISIBLE_DEVICES)
+          reply(request.id, "loaded", {
+            provider: "cuda",
+            deviceId: 0,
+            name: `GPU ${process.env.CUDA_VISIBLE_DEVICES}`,
+          });
+        else
+          reply(request.id, "error", {
+            code: "load_failed",
+            message: "runtime_profiles require CUDA device_id 0",
+          });
       } else {
         reply(request.id, "loaded", device);
       }
