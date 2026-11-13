@@ -175,7 +175,7 @@
   "dependencies": {
     "@github/copilot-sdk": "1.0.29",
     "@vscode/markdown-it-katex": "^1.1.2",
-    "markdown-it": "^14.1.0"
+    "markdown-it": "^15.0.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
