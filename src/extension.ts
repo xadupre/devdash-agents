@@ -472,6 +472,12 @@ export function activate(context: vscode.ExtensionContext): void {
         (row.idleStopAt === undefined || row.idleStopAt > Date.now())
       )
         return;
+      logEvent(
+        `${row.workerName} @ ${row.machineName}`,
+        idleOnly
+          ? `Idle for ${workerIdleMinutes()} min; closing ${row.sessions.length} Copilot session(s) to free memory.`
+          : `Stop requested; closing ${row.sessions.length} Copilot session(s).`,
+      );
       for (const session of row.sessions)
         await application.closeSession(session.repositoryId, session.view);
     };
@@ -723,6 +729,38 @@ export function activate(context: vscode.ExtensionContext): void {
           publishSettings();
         }
       })());
+    const logEvent = (
+      source: string,
+      message: string,
+      level: "info" | "error" = "info",
+    ): void => {
+      output.appendLine(`[${source}] ${message}`);
+      application.logEvent(source, message, level);
+    };
+    /** Logs the start, duration and outcome of a long-running step. */
+    const logStep = async <T>(
+      source: string,
+      label: string,
+      run: () => Promise<T>,
+    ): Promise<T> => {
+      const started = Date.now();
+      logEvent(source, `${label}...`);
+      try {
+        const result = await run();
+        logEvent(
+          source,
+          `${label}: done in ${((Date.now() - started) / 1000).toFixed(1)} s.`,
+        );
+        return result;
+      } catch (error) {
+        logEvent(
+          source,
+          `${label}: failed after ${((Date.now() - started) / 1000).toFixed(1)} s: ${error instanceof Error ? error.message : String(error)}`,
+          "error",
+        );
+        throw error;
+      }
+    };
     const prepareWorker = async (override?: string): Promise<string> => {
       const configuredWorker =
         override ??
@@ -758,10 +796,15 @@ export function activate(context: vscode.ExtensionContext): void {
               controller.abort(),
             );
             try {
-              await installEngine(
-                setupScript,
-                [],
-                AbortSignal.any([controller.signal, lifetime.signal]),
+              await logStep(
+                "this computer",
+                "Installing the local model engine",
+                () =>
+                  installEngine(
+                    setupScript,
+                    [],
+                    AbortSignal.any([controller.signal, lifetime.signal]),
+                  ),
               );
             } finally {
               subscription.dispose();
@@ -805,15 +848,28 @@ export function activate(context: vscode.ExtensionContext): void {
               );
               try {
                 progress.report({ message: "looking for the worker..." });
-                return await ensureRemoteWorker(remote, {
-                  nativeDirectory: join(context.extensionPath, "native"),
-                  signal: AbortSignal.any([controller.signal, lifetime.signal]),
-                  onInstall: () =>
-                    progress.report({
-                      message:
-                        "building it on the remote machine (first use, several minutes)...",
+                return await logStep(
+                  remote.name,
+                  "Looking for the native worker",
+                  () =>
+                    ensureRemoteWorker(remote, {
+                      nativeDirectory: join(context.extensionPath, "native"),
+                      signal: AbortSignal.any([
+                        controller.signal,
+                        lifetime.signal,
+                      ]),
+                      onInstall: () => {
+                        logEvent(
+                          remote.name,
+                          "Native worker not found; building it on the remote machine (first use, several minutes)...",
+                        );
+                        progress.report({
+                          message:
+                            "building it on the remote machine (first use, several minutes)...",
+                        });
+                      },
                     }),
-                });
+                );
               } finally {
                 subscription.dispose();
               }
@@ -885,6 +941,7 @@ export function activate(context: vscode.ExtensionContext): void {
           sharedBuffer: modelInfo.sharedBuffer,
         },
         () => workerIdleMinutes() * 60_000,
+        (message, level) => logEvent(modelInfo.name, message, level),
       );
       localHosts.set(hostId, host);
       hostMachines.set(host, launch.machine);
@@ -898,19 +955,29 @@ export function activate(context: vscode.ExtensionContext): void {
       deviceId: number,
     ): Promise<{ provider: LocalProvider; deviceId: number }> => {
       if (provider !== "auto" && deviceId >= 0) return { provider, deviceId };
-      const discovery = startWorker(launch, requestTimeout());
-      try {
-        const devices = await discovery.discover(
-          AbortSignal.any([
-            lifetime.signal,
-            AbortSignal.timeout(DEVICE_DISCOVERY_TIMEOUT_MS),
-          ]),
-        );
-        const device = resolveLocalDevice(devices, provider, deviceId);
-        return { provider: device.provider, deviceId: device.deviceId };
-      } finally {
-        await discovery.stop();
-      }
+      return logStep(
+        launch.machine || "this computer",
+        "Discovering CPU and CUDA devices",
+        async () => {
+          const discovery = startWorker(launch, requestTimeout());
+          try {
+            const devices = await discovery.discover(
+              AbortSignal.any([
+                lifetime.signal,
+                AbortSignal.timeout(DEVICE_DISCOVERY_TIMEOUT_MS),
+              ]),
+            );
+            const device = resolveLocalDevice(devices, provider, deviceId);
+            logEvent(
+              launch.machine || "this computer",
+              `Selected ${device.provider.toUpperCase()} ${device.deviceId} (${device.name}).`,
+            );
+            return { provider: device.provider, deviceId: device.deviceId };
+          } finally {
+            await discovery.stop();
+          }
+        },
+      );
     };
     const preparedWorkerSources = new Map<string, Promise<string>>();
     const prepareWorkerSource = (
@@ -921,30 +988,62 @@ export function activate(context: vscode.ExtensionContext): void {
       const existing = preparedWorkerSources.get(key);
       if (existing) return existing;
       const prepare = async (): Promise<string> => {
+        const source = worker.name;
         if (worker.model.kind === "foundry") {
-          const downloaded = await downloadFoundryModel(
-            worker.model.source,
-            workerMachine.command
-              ? context.globalStorageUri.fsPath
-              : workerMachine.modelsPath,
-            { signal: lifetime.signal },
+          let reported = -1;
+          const downloaded = await logStep(
+            source,
+            `Getting Foundry model ${worker.model.source} on this computer`,
+            () =>
+              downloadFoundryModel(
+                worker.model.source,
+                workerMachine.command
+                  ? context.globalStorageUri.fsPath
+                  : workerMachine.modelsPath,
+                { signal: lifetime.signal },
+                ({ received, total }) => {
+                  if (!(total > 0)) return;
+                  const percent = Math.floor((received / total) * 10) * 10;
+                  if (percent <= reported) return;
+                  reported = percent;
+                  logEvent(
+                    source,
+                    `Downloaded ${percent}% of ${(total / 1024 ** 3).toFixed(1)} GB.`,
+                  );
+                },
+              ),
           );
           return workerMachine.command
-            ? uploadRemoteModel(
-                workerMachine,
-                downloaded,
-                worker.model.source,
-                lifetime.signal,
+            ? logStep(
+                source,
+                `Copying the model to ${workerMachine.name}`,
+                () =>
+                  uploadRemoteModel(
+                    workerMachine,
+                    downloaded,
+                    worker.model.source,
+                    lifetime.signal,
+                  ),
               )
             : downloaded;
         }
-        const source =
+        const model =
           worker.model.kind === "model-id"
             ? worker.model.source
             : machineModelSource(workerMachine, worker.model.source);
         return workerMachine.command
-          ? prepareRemoteModel(workerMachine, worker, source, lifetime.signal)
-          : Promise.resolve(source);
+          ? logStep(
+              source,
+              `Preparing model ${model} on ${workerMachine.name}`,
+              () =>
+                prepareRemoteModel(
+                  workerMachine,
+                  worker,
+                  model,
+                  lifetime.signal,
+                ),
+            )
+          : Promise.resolve(model);
       };
       const result = prepare().catch((error) => {
         if (preparedWorkerSources.get(key) === result)
@@ -1028,9 +1127,14 @@ export function activate(context: vscode.ExtensionContext): void {
             ? await prepareWorkerSource(assignment)
             : configuredPath;
           if (remote) {
-            const inspected = await inspectRemoteModel(
-              { ...remote, modelPath: selectedPath },
-              lifetime.signal,
+            const inspected = await logStep(
+              remote.name,
+              `Inspecting model ${selectedPath}`,
+              () =>
+                inspectRemoteModel(
+                  { ...remote, modelPath: selectedPath },
+                  lifetime.signal,
+                ),
             );
             modelPath = inspected.directory;
             modelInfo = {
@@ -1110,10 +1214,15 @@ export function activate(context: vscode.ExtensionContext): void {
             controller.abort(),
           );
           try {
-            return await prepareLocalModel(source, storageDirectory, {
-              provider: targetProvider,
-              signal: AbortSignal.any([controller.signal, lifetime.signal]),
-            });
+            return await logStep(
+              "this computer",
+              `Preparing local model ${source} for ${targetProvider.toUpperCase()}`,
+              () =>
+                prepareLocalModel(source, storageDirectory, {
+                  provider: targetProvider,
+                  signal: AbortSignal.any([controller.signal, lifetime.signal]),
+                }),
+            );
           } finally {
             subscription.dispose();
           }
@@ -1637,6 +1746,10 @@ export function activate(context: vscode.ExtensionContext): void {
             case "stop-local-worker": {
               const host = localHosts.get(message.hostId);
               if (!host) throw new Error("The worker is no longer running.");
+              logEvent(
+                host.snapshot().name ?? host.modelPath,
+                "Stop requested.",
+              );
               await host.stop();
               break;
             }

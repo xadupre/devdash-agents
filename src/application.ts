@@ -3107,10 +3107,20 @@ export class AgentApplication {
     message: string,
     level: ApplicationLog["level"] = "info",
   ): void {
+    this.logEvent(session.repository.name, message, level);
+  }
+
+  /** Records an event not tied to one session, e.g. a worker or machine step. */
+  logEvent(
+    source: string,
+    message: string,
+    level: ApplicationLog["level"] = "info",
+  ): void {
+    if (this.closed) return;
     this.logs.push({
       id: ++this.logSequence,
       timestamp: new Date().toISOString(),
-      repository: session.repository.name,
+      repository: source,
       message,
       level,
     });

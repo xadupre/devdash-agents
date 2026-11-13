@@ -788,3 +788,42 @@ test("idle workers stop after the timeout, busy ones never, and Stop frees memor
   assert.equal(host.snapshot().idleStopAt, undefined, "0 disables the timeout");
   await session.stop();
 });
+
+test("reports worker load, idle stop and failure events", async () => {
+  const events: string[] = [];
+  const host = new LocalModelHost(
+    "/model",
+    { provider: "cuda", deviceId: 1 },
+    () => new Worker(),
+    undefined,
+    undefined,
+    undefined,
+    () => 1,
+    (message, level = "info") => events.push(`${level}: ${message}`),
+  );
+  const session = host.attach("repo");
+  await session.load("/model", "cuda", 1);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(host.currentStatus, "unloaded");
+  assert.match(events[0]!, /^info: Starting the worker .* on CUDA 1/);
+  assert.match(events[1]!, /^info: Model loaded on .* in \d+\.\d s\.$/);
+  assert.match(events[2]!, /^info: Idle for 0 min; stopping the worker/);
+  assert.equal(events[3], "info: Worker stopped; its memory is freed.");
+
+  const failing = new LocalModelHost(
+    "/model",
+    { provider: "cpu", deviceId: 0 },
+    () =>
+      Object.assign(new Worker(), {
+        loadGate: Promise.reject(new Error("boom")),
+      }),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    (message, level = "info") => events.push(`${level}: ${message}`),
+  );
+  await assert.rejects(failing.attach("repo").load("/model", "cpu", 0));
+  assert.equal(events.at(-1), "error: Model load failed: boom");
+  await session.stop();
+});

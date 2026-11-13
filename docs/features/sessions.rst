@@ -14,6 +14,11 @@ use **Add** to open an independent session. Its dialog has three choices:
    repository path is shown.
 
 A summary repeats the three choices before **Create session**.
+Long steps are recorded in the **Log** tab and the *DevDash Agents* output
+channel, labelled by machine or worker, with their duration or error: native
+worker lookup and remote build, engine installation, model download (by 10%),
+copy, export or inspection, device discovery, model loading, and manual or idle
+worker stops.
 The **Session** dropdown lists all open sessions in the selected repository.
 **Close** stops only the selected session, leaving its transcript available.
 **Resume** lists the repository's saved Copilot sessions,

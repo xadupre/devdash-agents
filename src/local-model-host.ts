@@ -95,6 +95,10 @@ export class LocalModelHost {
     >,
     /** Milliseconds without activity before the worker process stops; 0 disables. */
     private readonly idleTimeoutMs: () => number = () => 0,
+    private readonly onEvent: (
+      message: string,
+      level?: "info" | "error",
+    ) => void = () => {},
   ) {
     if (placement.provider === "disk") this.status = "disk";
   }
@@ -304,7 +308,9 @@ export class LocalModelHost {
   async stop(): Promise<void> {
     await this.enqueue(async () => {
       if (this.status === "disk") return;
+      const running = !!this.worker;
       await this.unload();
+      if (running) this.onEvent("Worker stopped; its memory is freed.");
       this.clearCaches();
       this.status = "unloaded";
       this.error = undefined;
@@ -337,6 +343,12 @@ export class LocalModelHost {
     this.status = "loading";
     this.error = undefined;
     this.onChange();
+    const started = Date.now();
+    const target =
+      this.placement.provider === "auto"
+        ? "the automatically selected device"
+        : `${this.placement.provider.toUpperCase()}${this.placement.deviceId >= 0 ? ` ${this.placement.deviceId}` : ""}`;
+    this.onEvent(`Starting the worker and loading the model on ${target}...`);
     try {
       const controller = new AbortController();
       this.loadingController = controller;
@@ -348,6 +360,7 @@ export class LocalModelHost {
         this.device = undefined;
         this.status = "error";
         this.error = `Local model engine stopped: ${error.message}`;
+        this.onEvent(this.error, "error");
         this.clearCaches();
         this.onChange();
       });
@@ -360,11 +373,15 @@ export class LocalModelHost {
       );
       this.status = "ready";
       this.error = undefined;
+      this.onEvent(
+        `Model loaded on ${this.device.provider.toUpperCase()} ${this.device.deviceId} (${this.device.name}) in ${((Date.now() - started) / 1000).toFixed(1)} s.`,
+      );
       this.onChange();
       return this.device;
     } catch (error) {
       this.status = "error";
       this.error = error instanceof Error ? error.message : String(error);
+      this.onEvent(`Model load failed: ${this.error}`, "error");
       await this.unload();
       throw error;
     } finally {
@@ -411,6 +428,9 @@ export class LocalModelHost {
     this.idleTimer = setTimeout(() => {
       this.idleTimer = undefined;
       if (this.active || this.status !== "ready") return;
+      this.onEvent(
+        `Idle for ${Math.round(timeout / 60_000)} min; stopping the worker to free memory.`,
+      );
       void this.stop().catch(() => {});
     }, timeout);
     this.idleTimer.unref?.();
