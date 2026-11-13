@@ -39,8 +39,9 @@ Each worker chooses one machine, exactly one model source, and **CPU** or
   weights and tokenizer alongside it.
 * **Hugging Face model ID**: downloads and exports a supported checkpoint.
 * **Foundry catalogue model ID**: downloads the complete GenAI package. The
-  catalogue browser below supplies IDs; its capacity filtering describes the
-  extension host, not a remote worker.
+  worker form lists the public catalogue for the selected device (CPU or CUDA)
+  and fills the ``azureml://...`` ID from the chosen model. This list is not
+  filtered by the extension host's memory because the worker may be remote.
 
 Relative file/checkpoint paths are resolved under the worker machine's models
 directory. GenAI models load directly; checkpoint and Hub exports use the

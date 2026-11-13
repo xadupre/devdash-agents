@@ -40,6 +40,7 @@ import {
 import type { SettingsLoadStatus, SettingsState } from "./settings";
 import {
   downloadFoundryModel,
+  listFoundryModels as listFoundryCatalogue,
   localFoundryModels,
   type FoundryCatalog,
   type FoundryDevice,
@@ -1201,6 +1202,33 @@ export function activate(context: vscode.ExtensionContext): void {
             case "foundry-models":
               await listFoundryModels(message.device);
               break;
+            case "worker-foundry-models": {
+              // Unfiltered: the worker machine may be remote, so local memory is irrelevant.
+              let result:
+                | { models: { id: string; name: string; size: number }[] }
+                | { error: string };
+              try {
+                const { models } = await listFoundryCatalogue(message.device, {
+                  signal: lifetime.signal,
+                });
+                result = {
+                  models: models.map(({ id, name, size }) => ({
+                    id,
+                    name,
+                    size,
+                  })),
+                };
+              } catch (error) {
+                result = { error: report(error) };
+              }
+              await panel?.webview.postMessage({
+                type: "worker-foundry-models",
+                requestId: message.requestId,
+                device: message.device,
+                ...result,
+              });
+              break;
+            }
             case "foundry-download":
               await downloadFoundry(message.id);
               break;

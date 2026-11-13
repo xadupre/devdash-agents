@@ -378,6 +378,14 @@ export function renderApplication(resources: {
           </select>
           <label for="worker-source">Path or model ID</label><input id="worker-source" maxlength="4096" list="worker-model-suggestions">
           <datalist id="worker-model-suggestions"></datalist>
+          <div id="worker-foundry" hidden>
+            <label for="worker-foundry-model">Foundry catalogue model (for the selected device)</label>
+            <div class="settings-row">
+              <select id="worker-foundry-model" disabled><option value="">Loading the catalogue...</option></select>
+              <button id="list-worker-foundry-models" type="button" title="Reload Microsoft's public Foundry Local catalogue">Refresh</button>
+            </div>
+            <p id="worker-foundry-status" class="settings-status" role="status"></p>
+          </div>
           <label for="worker-provider">Device</label><select id="worker-provider"><option value="cpu">CPU</option><option value="cuda">CUDA</option></select>
           <label for="worker-device">Device index</label><input id="worker-device" type="number" min="0" step="1" value="0" required>
           <p class="repository-hint">Relative file/checkpoint paths use the worker machine's models directory. Files need their GenAI or Transformers configuration, weights and tokenizer alongside them; standalone ONNX and GGUF are not supported. Checkpoints and model IDs are exported on the worker machine using Python model-builder dependencies. Foundry packages are downloaded then streamed to remote storage if needed.</p>

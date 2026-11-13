@@ -259,6 +259,7 @@ export type ApplicationMessage =
         | "foundry-cancel";
     }
   | { type: "foundry-models"; device: FoundryDevice }
+  | { type: "worker-foundry-models"; requestId: string; device: "cpu" | "gpu" }
   | { type: "foundry-download"; id: string }
   | { type: "local-device"; provider: LocalProvider; deviceId: number }
   | {
@@ -381,6 +382,17 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
     if (!isFoundryDevice(device))
       throw new Error("Invalid Foundry Local device.");
     return { type: "foundry-models", device };
+  }
+  if (value.type === "worker-foundry-models") {
+    const device = "device" in value ? value.device : undefined;
+    const requestId = "requestId" in value ? value.requestId : undefined;
+    if (
+      (device !== "cpu" && device !== "gpu") ||
+      typeof requestId !== "string" ||
+      !/^[\w-]{1,100}$/.test(requestId)
+    )
+      throw new Error("Invalid Foundry catalogue request.");
+    return { type: "worker-foundry-models", requestId, device };
   }
   if (value.type === "harness-settings") {
     if (

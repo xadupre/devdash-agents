@@ -765,6 +765,24 @@ declare function acquireVsCodeApi(): {
   const workerSource = element("worker-source", HTMLInputElement);
   const workerProvider = element("worker-provider", HTMLSelectElement);
   const workerDevice = element("worker-device", HTMLInputElement);
+  const workerFoundry = element("worker-foundry", HTMLElement);
+  const workerFoundryModel = element("worker-foundry-model", HTMLSelectElement);
+  const listWorkerFoundryModels = element(
+    "list-worker-foundry-models",
+    HTMLButtonElement,
+  );
+  const workerFoundryStatus = element("worker-foundry-status", HTMLElement);
+  type WorkerFoundryCatalogue =
+    | { status: "loading"; requestId: string }
+    | { status: "error"; error: string }
+    | {
+        status: "ready";
+        models: { id: string; name: string; size: number }[];
+      };
+  const workerFoundryCatalogues = new Map<
+    "cpu" | "gpu",
+    WorkerFoundryCatalogue
+  >();
   const saveMachine = element("save-machine", HTMLButtonElement);
   const saveWorker = element("save-worker", HTMLButtonElement);
   const deleteMachine = element("delete-machine", HTMLButtonElement);
@@ -928,6 +946,66 @@ declare function acquireVsCodeApi(): {
       "Machine settings",
     );
   });
+  const workerFoundryDevice = (): "cpu" | "gpu" =>
+    workerProvider.value === "cuda" ? "gpu" : "cpu";
+  const requestWorkerFoundryModels = (): void => {
+    const device = workerFoundryDevice();
+    const requestId = crypto.randomUUID();
+    workerFoundryCatalogues.set(device, { status: "loading", requestId });
+    vscode.postMessage({ type: "worker-foundry-models", requestId, device });
+  };
+  const renderWorkerFoundry = (): void => {
+    const foundry = workerKind.value === "foundry";
+    workerFoundry.hidden = !foundry;
+    if (!foundry) return;
+    const device = workerFoundryDevice();
+    if (!workerFoundryCatalogues.has(device)) requestWorkerFoundryModels();
+    const catalogue = workerFoundryCatalogues.get(device)!;
+    const models = catalogue.status === "ready" ? catalogue.models : [];
+    const source = workerSource.value.trim();
+    const known = models.some((model) => model.id === source);
+    replaceOptions(
+      workerFoundryModel,
+      [
+        {
+          value: "",
+          label:
+            catalogue.status === "loading"
+              ? "Loading the catalogue..."
+              : catalogue.status === "error"
+                ? "Catalogue unavailable"
+                : models.length
+                  ? "Choose a model"
+                  : "No compatible model",
+        },
+        ...(source && !known && catalogue.status === "ready"
+          ? [{ value: source, label: `${source} (not in the catalogue)` }]
+          : []),
+        ...models.map((model) => ({
+          value: model.id,
+          label: `${model.name} - ${formatBytes(model.size)}`,
+        })),
+      ],
+      catalogue.status === "ready" ? source : "",
+    );
+    workerFoundryModel.disabled = catalogue.status !== "ready";
+    listWorkerFoundryModels.disabled = catalogue.status === "loading";
+    workerFoundryStatus.textContent =
+      catalogue.status === "loading"
+        ? `Listing Foundry Local ${device === "gpu" ? "CUDA" : "CPU"} models...`
+        : catalogue.status === "error"
+          ? `Could not list Foundry Local models: ${catalogue.error}`
+          : `${models.length} ${device === "gpu" ? "CUDA" : "CPU"} model(s) in the catalogue.`;
+  };
+  workerFoundryModel.addEventListener("change", () => {
+    workerSource.value = workerFoundryModel.value;
+  });
+  workerProvider.addEventListener("change", () => renderWorkerFoundry());
+  workerSource.addEventListener("input", () => renderWorkerFoundry());
+  listWorkerFoundryModels.addEventListener("click", () => {
+    requestWorkerFoundryModels();
+    renderWorkerFoundry();
+  });
   const updateWorkerKind = (): void => {
     const copilot = workerKind.value === "copilot";
     workerSource.required = !copilot;
@@ -938,9 +1016,7 @@ declare function acquireVsCodeApi(): {
           id: model.id,
           name: model.name,
         }))
-      : workerKind.value === "foundry"
-        ? (settingsState?.foundryCatalog?.models ?? [])
-        : [];
+      : [];
     element("worker-model-suggestions", HTMLDataListElement).replaceChildren(
       ...suggestions.map((model) => {
         const option = document.createElement("option");
@@ -949,6 +1025,7 @@ declare function acquireVsCodeApi(): {
         return option;
       }),
     );
+    renderWorkerFoundry();
   };
   workerKind.addEventListener("change", updateWorkerKind);
   workerEntry.addEventListener("change", () => {
@@ -3401,6 +3478,14 @@ declare function acquireVsCodeApi(): {
             requestId?: string;
             message: string;
           }
+        | ({
+            type: "worker-foundry-models";
+            requestId: string;
+            device: "cpu" | "gpu";
+          } & (
+            | { models: { id: string; name: string; size: number }[] }
+            | { error: string }
+          ))
         | {
             type: "execution-configuration-saved";
             requestId: string;
@@ -3457,6 +3542,20 @@ declare function acquireVsCodeApi(): {
           newerEdits ? "dirty" : "saved",
         );
         updateExecutionConfigurationControls();
+      } else if (event.data.type === "worker-foundry-models") {
+        const current = workerFoundryCatalogues.get(event.data.device);
+        if (
+          current?.status !== "loading" ||
+          current.requestId !== event.data.requestId
+        )
+          return;
+        workerFoundryCatalogues.set(
+          event.data.device,
+          "error" in event.data
+            ? { status: "error", error: event.data.error }
+            : { status: "ready", models: event.data.models },
+        );
+        renderWorkerFoundry();
       } else if (event.data.type === "execution-configuration-error") {
         if (event.data.requestId !== pendingExecutionSave?.requestId) return;
         pendingExecutionSave = undefined;

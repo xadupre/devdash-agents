@@ -5266,3 +5266,73 @@ test("machine and worker forms preserve independent paths, repeated hosts and on
     true,
   );
 });
+
+test("Foundry workers pick a catalogue model for the selected device", async (t) => {
+  const { dom, document, posted } = await setup(t);
+  const local = {
+    id: "local",
+    name: "Local",
+    command: "",
+    repositoriesPath: "/projects",
+    modelsPath: "/models",
+    workerPath: "worker",
+    cliPath: "copilot",
+  };
+  settingsSender(dom)({ execution: { machines: [local], workers: [] } });
+  const field = <T extends HTMLElement>(id: string): T =>
+    document.querySelector<T>(`#${id}`)!;
+  const kind = field<HTMLSelectElement>("worker-kind");
+  const provider = field<HTMLSelectElement>("worker-provider");
+  const catalogue = field<HTMLSelectElement>("worker-foundry-model");
+  const requests = () =>
+    posted.filter((message) => message.type === "worker-foundry-models");
+  assert.equal(field("worker-foundry").hidden, true);
+  assert.equal(requests().length, 0);
+  kind.value = "foundry";
+  kind.dispatchEvent(new dom.window.Event("change"));
+  assert.equal(field("worker-foundry").hidden, false);
+  assert.equal(catalogue.disabled, true);
+  const reply = (data: object): void => {
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent("message", {
+        data: { type: "worker-foundry-models", ...data },
+      }),
+    );
+  };
+  const [cpu] = requests();
+  if (cpu?.type !== "worker-foundry-models") assert.fail();
+  assert.equal(cpu.device, "cpu");
+  reply({ requestId: "stale", device: "cpu", models: [] });
+  assert.equal(catalogue.disabled, true);
+  const cpuId =
+    "azureml://registries/azureml/models/qwen3-0.6b-generic-cpu/versions/4";
+  reply({
+    requestId: cpu.requestId,
+    device: "cpu",
+    models: [{ id: cpuId, name: "qwen3-0.6b-generic-cpu:4", size: 2 ** 30 }],
+  });
+  assert.equal(catalogue.disabled, false);
+  catalogue.value = cpuId;
+  catalogue.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert.equal(field<HTMLInputElement>("worker-source").value, cpuId);
+  provider.value = "cuda";
+  provider.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  const gpu = requests()[1];
+  if (gpu?.type !== "worker-foundry-models") assert.fail();
+  assert.equal(gpu.device, "gpu");
+  reply({ requestId: gpu.requestId, device: "gpu", error: "offline" });
+  assert.match(field("worker-foundry-status").textContent!, /offline/);
+  provider.value = "cpu";
+  provider.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert.equal(requests().length, 2, "cached catalogues are reused");
+  assert.equal(catalogue.value, cpuId);
+  field<HTMLInputElement>("worker-id").value = "qwen";
+  field<HTMLInputElement>("worker-name").value = "Qwen";
+  field<HTMLFormElement>("worker-configuration").requestSubmit();
+  const saved = posted.at(-1)!;
+  if (saved.type !== "execution-configuration") assert.fail();
+  assert.deepEqual(saved.configuration.workers[0]!.model, {
+    kind: "foundry",
+    source: cpuId,
+  });
+});

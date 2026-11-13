@@ -106,6 +106,23 @@ test("machines allow repeated connections and workers bind one model and device"
       }),
     /configuration request/,
   );
+  assert.deepEqual(
+    parseApplicationMessage({
+      type: "worker-foundry-models",
+      requestId: "r-1",
+      device: "gpu",
+    }),
+    { type: "worker-foundry-models", requestId: "r-1", device: "gpu" },
+  );
+  for (const invalid of [
+    { requestId: "r-1", device: "npu" },
+    { device: "cpu" },
+  ])
+    assert.throws(
+      () =>
+        parseApplicationMessage({ type: "worker-foundry-models", ...invalid }),
+      /Foundry catalogue request/,
+    );
   const assigned = assignSession(config, "inference", "local");
   assert.equal(assigned.workerMachine.id, "gpu");
   assert.equal(assigned.executionMachine.id, "local");
