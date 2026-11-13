@@ -79,9 +79,15 @@ const config: ExecutionConfiguration = {
   ],
 };
 
-async function directory(t: TestContext): Promise<string> {
+async function directory(
+  t: TestContext,
+  resources: { dispose(): Promise<void> }[] = [],
+): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "devdash-execution-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(async () => {
+    await Promise.all(resources.map((resource) => resource.dispose()));
+    await rm(root, { recursive: true, force: true });
+  });
   return root;
 }
 
@@ -226,7 +232,8 @@ test("invalid machine, worker and persisted assignments fail explicitly", () => 
 });
 
 test("session assignments reach factories and survive disk persistence, New and parallel requests", async (t) => {
-  const root = await directory(t);
+  const applications: AgentApplication[] = [];
+  const root = await directory(t, applications);
   const repository = join(root, "alpha");
   await mkdir(join(repository, ".git"), { recursive: true });
   await writeFile(join(repository, "scenario"), "persist");
@@ -249,7 +256,7 @@ test("session assignments reach factories and survive disk persistence, New and 
       saved,
     );
   const application = create();
-  t.after(() => application.dispose());
+  applications.push(application);
   await application.refresh();
   await application.openSession(repository, assignment);
   await application.send(repository, "First request");
@@ -266,7 +273,7 @@ test("session assignments reach factories and survive disk persistence, New and 
   const storage = new ApplicationStorage(root, root);
   await storage.save(application.getSnapshot());
   const restored = create(await storage.load());
-  t.after(() => restored.dispose());
+  applications.push(restored);
   await restored.refresh();
   assert.deepEqual(restored.getAssignment(repository), assignment);
   await restored.openSession(repository);
@@ -324,7 +331,8 @@ test("session assignments reach factories and survive disk persistence, New and 
 });
 
 test("deleting many archived sessions reuses one CLI per worker assignment", async (t) => {
-  const root = await directory(t);
+  const applications: AgentApplication[] = [];
+  const root = await directory(t, applications);
   const repository = join(root, "alpha");
   await mkdir(join(repository, ".git"), { recursive: true });
   await writeFile(join(repository, "scenario"), "persist");
@@ -358,7 +366,7 @@ test("deleting many archived sessions reuses one CLI per worker assignment", asy
       sessions: [{ id: repository, ...history[0]!, history: history.slice(1) }],
     },
   );
-  t.after(() => application.dispose());
+  applications.push(application);
   await application.refresh();
   await application.deleteSessions(repository, true);
   assert.equal(created, 2);
