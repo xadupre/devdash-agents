@@ -144,10 +144,16 @@ function ciFixture(respond: (path: string, url: URL) => unknown): {
         url: "https://github.com/acme/project",
       });
     }
-    assert.deepEqual(args.slice(0, 3), ["api", "--hostname", "github.com"]);
-    const path = args[3]!;
+    assert.deepEqual(args.slice(0, 5), [
+      "api",
+      "--hostname",
+      "github.com",
+      "--method",
+      "GET",
+    ]);
+    const path = args[5]!;
     const url = new URL(path, "https://api.github.com");
-    for (let index = 4; index < args.length; index += 2) {
+    for (let index = 6; index < args.length; index += 2) {
       assert.equal(args[index], "-f");
       const [key, ...value] = args[index + 1]!.split("=");
       url.searchParams.set(key!, value.join("="));
@@ -172,8 +178,8 @@ test("CI activity loads the selected repository's latest runs and complete 24-ho
       assert.equal(url.searchParams.get("branch"), "trunk");
       return { workflow_runs: [workflowRun(34, "failure")] };
     }
-    const since = url.searchParams.get("created");
-    assert.match(since ?? "", /^>=.+ <=.+$/);
+    const created = url.searchParams.get("created");
+    assert.match(created ?? "", /^.+\.\..+$/);
     const now = Date.now();
     const inWindow = new Date(now - 60 * 60 * 1000).toISOString();
     return {
@@ -203,7 +209,7 @@ test("CI activity loads the selected repository's latest runs and complete 24-ho
   assert.ok(
     source.calls.some(
       (args) =>
-        args[3] === "repos/acme/project/actions/workflows/12/runs" &&
+        args[5] === "repos/acme/project/actions/workflows/12/runs" &&
         args.includes("branch=trunk") &&
         args.includes("per_page=1"),
     ),
@@ -212,17 +218,11 @@ test("CI activity loads the selected repository's latest runs and complete 24-ho
     .flat()
     .find((argument) => argument.startsWith("created="))
     ?.slice("created=".length);
-  const [start, end] = createdQuery?.split(" ") ?? [];
+  const [start, end] = createdQuery?.split("..") ?? [];
   assert.ok(start);
   assert.ok(end);
-  assert.ok(start.startsWith(">="));
-  assert.ok(end.startsWith("<="));
-  assert.ok(Math.abs(Date.parse(end.slice(2)) - Date.now()) < 1000);
-  assert.ok(
-    Math.abs(
-      Date.parse(end.slice(2)) - Date.parse(start.slice(2)) - 86_400_000,
-    ) < 1000,
-  );
+  assert.ok(Math.abs(Date.parse(end) - Date.now()) < 1000);
+  assert.ok(Math.abs(Date.parse(end) - Date.parse(start) - 86_400_000) < 1000);
 });
 
 test("CI activity rejects duplicate runs shifted across pagination boundaries", async () => {

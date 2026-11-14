@@ -692,7 +692,7 @@ export class GitHubRepository {
       parameters: Record<string, string> = {},
     ): Promise<Record<string, unknown>> => {
       signal.throwIfAborted();
-      const args = ["api", "--hostname", host, path];
+      const args = ["api", "--hostname", host, "--method", "GET", path];
       for (const [key, value] of Object.entries(parameters)) {
         args.push("-f", `${key}=${value}`);
       }
@@ -759,7 +759,7 @@ export class GitHubRepository {
         const data = await api(
           `repos/${owner}/${name}/actions/workflows/${id}/runs`,
           {
-            created: `>=${since} <=${until}`,
+            created: `${since}..${until}`,
             page: String(page),
             per_page: "100",
           },
