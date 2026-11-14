@@ -1755,6 +1755,72 @@ declare function acquireVsCodeApi(): {
   }
   const error = element("error", HTMLElement);
   const composer = element("composer", HTMLFormElement);
+  const openLocalDiff = element("open-local-diff", HTMLButtonElement);
+  const diffView = element("local-diff-view", HTMLElement);
+  const diffLayout = element("diff-layout", HTMLElement);
+  const diffTree = element("diff-tree", HTMLElement);
+  const diffTreeDivider = element("diff-tree-divider", HTMLElement);
+  const diffHeading = element("diff-heading", HTMLElement);
+  const diffBack = element("diff-back", HTMLButtonElement);
+  const diffOldLabel = element("diff-old-label", HTMLElement);
+  const diffNewLabel = element("diff-new-label", HTMLElement);
+  const diffReferenceHint = element("diff-reference-hint", HTMLElement);
+  const diffStatus = element("diff-status", HTMLElement);
+  const diffError = element("diff-error", HTMLElement);
+  const diffFileStatus = element("diff-file-status", HTMLElement);
+  const diffFilename = element("diff-filename", HTMLElement);
+  const diffOld = element("diff-old", HTMLElement);
+  const diffNew = element("diff-new", HTMLElement);
+  const diffSplit = element("diff-split", HTMLElement);
+  const diffDivider = element("diff-divider", HTMLElement);
+  const diffOverview = element("diff-overview", HTMLElement);
+  const diffOverviewOldWindow = element(
+    "diff-overview-old-window",
+    HTMLElement,
+  );
+  const diffOverviewNewWindow = element(
+    "diff-overview-new-window",
+    HTMLElement,
+  );
+  const diffOverviewPathElement = (side: "removed" | "added"): SVGElement => {
+    const path = document.getElementById(`diff-overview-${side}`);
+    if (!(path instanceof SVGElement))
+      throw new Error("Missing diff overview path.");
+    return path;
+  };
+  const diffOverviewRemoved = diffOverviewPathElement("removed");
+  const diffOverviewAdded = diffOverviewPathElement("added");
+  const diffLinks = (() => {
+    const result = document.getElementById("diff-links");
+    if (!(result instanceof SVGElement)) throw new Error("Missing diff links.");
+    return result;
+  })();
+  const diffPrevious = element("diff-previous", HTMLButtonElement);
+  const diffNext = element("diff-next", HTMLButtonElement);
+  const diffNotes = element("diff-notes", HTMLTextAreaElement);
+  const diffSend = element("diff-send", HTMLButtonElement);
+  type LocalDiffList = import("./local-diff").LocalDiffList;
+  type LocalDiffFile = import("./local-diff").LocalDiffFile;
+  type LocalDiffUpdate = import("./local-diff").LocalDiffUpdate;
+  type PullRequestDiffList = import("./github").PullRequestDiffList;
+  type PullRequestDiffUpdate = import("./github").PullRequestDiffUpdate;
+  let diffContext:
+    | ({
+        id: string;
+        view: import("./application").SessionView;
+        key: string;
+        requestId: string;
+        path?: string;
+        file?: LocalDiffFile;
+      } & (
+        | { source: "local"; list?: LocalDiffList }
+        | { source: "pull"; url: string; list?: PullRequestDiffList }
+      ))
+    | undefined;
+  const diffDrafts = new Map<string, string>();
+  let diffChangeIndex = -1;
+  let diffNavigation: -1 | 1 | undefined;
+  let diffScrollAnchor: number | undefined;
   const filters = element("information-filters", HTMLFieldSetElement);
   const previousPrompt = element("previous-prompt", HTMLButtonElement);
   const nextPrompt = element("next-prompt", HTMLButtonElement);
@@ -1775,6 +1841,7 @@ declare function acquireVsCodeApi(): {
     "github-discussion-external",
     HTMLButtonElement,
   );
+  const discussionDiff = element("github-discussion-diff", HTMLButtonElement);
   const discussionShow = element("github-discussion-show", HTMLButtonElement);
   const commentForm = element("github-comment-form", HTMLFormElement);
   const commentBody = element("github-comment-body", HTMLTextAreaElement);
@@ -2323,6 +2390,7 @@ declare function acquireVsCodeApi(): {
       repository?.sessions?.find((session) => session.view === activeView())
         ?.open ??
       ["starting", "ready", "busy"].includes(repository?.status ?? "idle");
+    openLocalDiff.disabled = !repository || !sessionOpen;
     addSession.disabled =
       !repository ||
       Boolean(repository.managementBusy) ||
@@ -2418,6 +2486,15 @@ declare function acquireVsCodeApi(): {
         !imageDrafts.get(
           repository ? imageDraftKey(repository.id, activeView()) : "",
         )?.length);
+    diffSend.disabled =
+      !diffNotes.value.trim() ||
+      !ready ||
+      Boolean(repository?.managementBusy) ||
+      (disk && localMode) ||
+      submitting ||
+      readingImages.has(
+        repository ? imageDraftKey(repository.id, activeView()) : "",
+      );
     exportSession.disabled =
       !repository ||
       submitting ||
@@ -2512,6 +2589,13 @@ declare function acquireVsCodeApi(): {
     }
     const switched =
       state?.activeId !== next.activeId || previousView !== nextView || reset;
+    if (
+      diffContext &&
+      (diffContext.id !== next.activeId ||
+        diffContext.view !== nextView ||
+        reset)
+    )
+      closeDiff();
     if (selectedDiscussion && selectedDiscussion.id !== next.activeId) {
       showConversation(true);
     }
@@ -2812,6 +2896,902 @@ declare function acquireVsCodeApi(): {
     }
   });
 
+  let diffLineHeight = 20;
+  let diffWidth = 0.5;
+  let diffDrag: number | undefined;
+  let expectedOldScroll: number | undefined;
+  let expectedNewScroll: number | undefined;
+  let diffTreeWidth = 180;
+  let visibleDiffTreeWidth = 180;
+  let diffTreeDrag: { pointerId: number; x: number; width: number } | undefined;
+  let diffOverviewFromOld = false;
+
+  function resizeDiffTree(width: number, remember = true): void {
+    const available = diffLayout.clientWidth - 8;
+    if (available <= 0) return;
+    const minimumTree = 80;
+    const minimumFile = 320;
+    const scale = Math.min(1, available / (minimumTree + minimumFile));
+    const minimum = minimumTree * scale;
+    const maximum = available - minimumFile * scale;
+    visibleDiffTreeWidth = Math.max(minimum, Math.min(maximum, width));
+    if (remember) diffTreeWidth = visibleDiffTreeWidth;
+    diffTree.style.flexBasis = `${visibleDiffTreeWidth}px`;
+    diffTreeDivider.setAttribute("aria-valuemin", String(Math.round(minimum)));
+    diffTreeDivider.setAttribute("aria-valuemax", String(Math.round(maximum)));
+    diffTreeDivider.setAttribute(
+      "aria-valuenow",
+      String(Math.round(visibleDiffTreeWidth)),
+    );
+    diffTreeDivider.setAttribute(
+      "aria-valuetext",
+      `${Math.round(visibleDiffTreeWidth)} pixels`,
+    );
+  }
+
+  function stopDiffTreeResize(): void {
+    diffTreeDrag = undefined;
+    diffTreeDivider.classList.remove("dragging");
+    diffLayout.classList.remove("resizing-tree");
+  }
+
+  diffTreeDivider.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    diffTreeDrag = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      width: visibleDiffTreeWidth,
+    };
+    diffTreeDivider.setPointerCapture?.(event.pointerId);
+    diffTreeDivider.classList.add("dragging");
+    diffLayout.classList.add("resizing-tree");
+  });
+  document.addEventListener("pointermove", (event) => {
+    if (diffTreeDrag?.pointerId === event.pointerId)
+      resizeDiffTree(diffTreeDrag.width + event.clientX - diffTreeDrag.x);
+  });
+  for (const type of ["pointerup", "pointercancel"] as const)
+    document.addEventListener(type, (event) => {
+      if (event.pointerId === diffTreeDrag?.pointerId) stopDiffTreeResize();
+    });
+  diffTreeDivider.addEventListener("lostpointercapture", stopDiffTreeResize);
+  diffTreeDivider.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    resizeDiffTree(
+      visibleDiffTreeWidth + (event.key === "ArrowLeft" ? -16 : 16),
+    );
+  });
+  window.addEventListener("blur", stopDiffTreeResize);
+
+  function closeDiff(): void {
+    if (diffContext)
+      vscode.postMessage({
+        type: "close-diff",
+        id: diffContext.id,
+        view: diffContext.view,
+      });
+    diffView.hidden = true;
+    diffContext = undefined;
+    renderDiffOverview();
+    stopDiffTreeResize();
+    const panel = element("chat-panel", HTMLElement);
+    panel.classList.remove("reading-diff");
+    panel.setAttribute("aria-label", "Copilot conversation");
+  }
+
+  function requestDiff(path?: string): void {
+    if (!diffContext) return;
+    const context = diffContext;
+    if (path !== undefined && !context.list) return;
+    context.requestId = crypto.randomUUID();
+    context.file = undefined;
+    renderDiffOverview();
+    diffChangeIndex = -1;
+    diffScrollAnchor = undefined;
+    if (path !== undefined) context.path = path;
+    else {
+      context.list = undefined;
+      diffTree.replaceChildren();
+    }
+    diffError.hidden = true;
+    diffOld.replaceChildren();
+    diffNew.replaceChildren();
+    diffLinks.replaceChildren();
+    diffPrevious.disabled = true;
+    diffNext.disabled = true;
+    diffFileStatus.textContent = "";
+    diffFilename.textContent = path ?? "Select a file";
+    diffStatus.textContent = path
+      ? "Loading file..."
+      : context.source === "local"
+        ? "Loading local diff..."
+        : "Loading pull request diff...";
+    if (context.source === "pull")
+      vscode.postMessage({
+        type: "pull-diff",
+        id: context.id,
+        view: context.view,
+        url: context.url,
+        requestId: context.requestId,
+        ...(path !== undefined ? { path } : {}),
+      });
+    else
+      vscode.postMessage({
+        type: "local-diff",
+        id: context.id,
+        view: context.view,
+        requestId: context.requestId,
+        ...(path !== undefined && context.list
+          ? { path, commit: context.list.commit }
+          : {}),
+      });
+  }
+
+  function renderDiffTree(): void {
+    const context = diffContext;
+    if (!context?.list) return;
+    interface Tree {
+      folders: Map<string, Tree>;
+      files: import("./local-diff").DiffEntry[];
+    }
+    const root: Tree = { folders: new Map(), files: [] };
+    for (const file of context.list.files) {
+      const parts = file.path.split("/");
+      parts.pop();
+      let node = root;
+      for (const part of parts) {
+        let child = node.folders.get(part);
+        if (!child) {
+          child = { folders: new Map(), files: [] };
+          node.folders.set(part, child);
+        }
+        node = child;
+      }
+      node.files.push(file);
+    }
+    const renderNode = (node: Tree, parent: HTMLElement): void => {
+      for (const [name, folder] of node.folders) {
+        const details = document.createElement("details");
+        details.open = true;
+        const summary = document.createElement("summary");
+        summary.textContent = name;
+        details.append(summary);
+        renderNode(folder, details);
+        parent.append(details);
+      }
+      for (const file of node.files) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.path = file.path;
+        button.textContent = `${file.status} ${file.path.split("/").at(-1)}`;
+        button.title = file.oldPath
+          ? `${file.oldPath} → ${file.path}`
+          : file.path;
+        button.setAttribute("aria-current", String(file.path === context.path));
+        button.addEventListener("click", () => {
+          if (!diffContext) return;
+          diffNavigation = undefined;
+          diffContext.path = file.path;
+          for (const entry of diffTree.querySelectorAll<HTMLButtonElement>(
+            "button[data-path]",
+          ))
+            entry.setAttribute(
+              "aria-current",
+              String(entry.dataset.path === file.path),
+            );
+          requestDiff(file.path);
+        });
+        parent.append(button);
+      }
+    };
+    diffTree.replaceChildren();
+    renderNode(root, diffTree);
+  }
+
+  function addDiffReference(side: "old" | "new", line: number): void {
+    const context = diffContext;
+    if (!context?.file || !context.list) return;
+    const path =
+      side === "old"
+        ? (context.file.oldPath ?? context.file.path)
+        : context.file.path;
+    const label = JSON.stringify(path)
+      .slice(1, -1)
+      .replaceAll("[", "\\[")
+      .replaceAll("]", "\\]");
+    const target = path
+      .split("/")
+      .map((part) =>
+        encodeURIComponent(part).replace(
+          /[!'()*]/g,
+          (character) =>
+            `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+        ),
+      )
+      .join("/");
+    let revision: string;
+    let link: string;
+    if (context.source === "pull") {
+      const commit =
+        side === "old" ? context.list.baseCommit : context.list.headCommit;
+      const remote = new URL(context.url);
+      const repository = remote.pathname.split("/").slice(1, 3).join("/");
+      remote.pathname = `/${repository}/blob/${commit}/${target}`;
+      remote.search = "";
+      remote.hash = `L${line}`;
+      link = remote.toString();
+      revision = `PR ${side === "old" ? "base" : "head"} ${commit.slice(0, 12)}`;
+    } else {
+      link = `${target}#L${line}`;
+      revision =
+        side === "old"
+          ? `HEAD ${context.list.commit.slice(0, 12)}`
+          : "working tree";
+    }
+    const reference = `- [${label}:${line}](${link}) (${revision}): `;
+    const text = `${diffNotes.value}${diffNotes.value && !diffNotes.value.endsWith("\n") ? "\n" : ""}${reference}`;
+    if (text.length > diffNotes.maxLength) {
+      diffError.textContent =
+        "Review notes are too long to add another reference.";
+      diffError.hidden = false;
+      return;
+    }
+    diffNotes.value = text;
+    diffDrafts.set(context.key, text);
+    diffNotes.focus();
+    updateControls();
+  }
+
+  function renderDiffOverview(file?: LocalDiffFile): void {
+    const enabled = !!(
+      file &&
+      !file.binary &&
+      (file.oldLines.length || file.newLines.length)
+    );
+    const marks = (fromOld: boolean): string => {
+      if (!file || !enabled) return "";
+      const length = fromOld ? file.oldLines.length : file.newLines.length;
+      if (!length) return "";
+      const paths: string[] = [];
+      for (const change of file.changes) {
+        const start = fromOld ? change.oldStart : change.newStart;
+        const count = fromOld ? change.oldCount : change.newCount;
+        if (!count) continue;
+        const top = (Math.max(0, Math.min(length, start)) * 10000) / length;
+        const bottom =
+          (Math.max(0, Math.min(length, start + count)) * 10000) / length;
+        if (bottom > top)
+          paths.push(
+            `M${fromOld ? ".15" : "1.15"} ${top.toFixed(2)}h.7v${(bottom - top).toFixed(2)}h-.7z`,
+          );
+      }
+      return paths.join("");
+    };
+    diffOverviewRemoved.setAttribute("d", marks(true));
+    diffOverviewAdded.setAttribute("d", marks(false));
+    diffOverview.setAttribute("aria-disabled", String(!enabled));
+    diffOverview.tabIndex = enabled ? 0 : -1;
+    diffOverviewFromOld = !!(file?.oldLines.length && !file.newLines.length);
+    updateDiffOverview();
+  }
+
+  function updateDiffOverview(): void {
+    const file = diffContext?.file;
+    if (
+      !file ||
+      file.binary ||
+      !(file.oldLines.length || file.newLines.length)
+    ) {
+      diffOverviewOldWindow.hidden = true;
+      diffOverviewNewWindow.hidden = true;
+      diffOverview.setAttribute("aria-valuenow", "0");
+      diffOverview.removeAttribute("aria-valuetext");
+      return;
+    }
+    const updateWindow = (
+      indicator: HTMLElement,
+      pane: HTMLElement,
+      lines: number,
+    ): void => {
+      const totalHeight = lines * diffLineHeight;
+      if (!totalHeight || !pane.clientHeight) {
+        indicator.hidden = true;
+        return;
+      }
+      const top = Math.min(1, Math.max(0, pane.scrollTop / totalHeight));
+      const bottom = Math.min(
+        1,
+        Math.max(top, (pane.scrollTop + pane.clientHeight) / totalHeight),
+      );
+      indicator.style.top = `${top * 100}%`;
+      indicator.style.height = `${(bottom - top) * 100}%`;
+      indicator.hidden = false;
+    };
+    updateWindow(diffOverviewOldWindow, diffOld, file.oldLines.length);
+    updateWindow(diffOverviewNewWindow, diffNew, file.newLines.length);
+
+    const pane = diffOverviewFromOld ? diffOld : diffNew;
+    const count = diffOverviewFromOld
+      ? file.oldLines.length
+      : file.newLines.length;
+    const maximum = Math.max(0, count * diffLineHeight - pane.clientHeight);
+    const first = Math.min(
+      count,
+      Math.floor(pane.scrollTop / diffLineHeight) + 1,
+    );
+    const last = Math.min(
+      count,
+      Math.max(
+        first,
+        Math.ceil((pane.scrollTop + pane.clientHeight) / diffLineHeight),
+      ),
+    );
+    const side = diffOverviewFromOld
+      ? diffContext?.source === "pull"
+        ? "base"
+        : "HEAD"
+      : diffContext?.source === "pull"
+        ? "head"
+        : "working tree";
+    diffOverview.setAttribute(
+      "aria-valuenow",
+      String(maximum ? Math.round((pane.scrollTop / maximum) * 100) : 0),
+    );
+    diffOverview.setAttribute(
+      "aria-valuetext",
+      `${side} lines ${first} to ${last} of ${count}`,
+    );
+  }
+
+  function scrollDiffOverview(position: number, fromOld: boolean): void {
+    const file = diffContext?.file;
+    if (!file || file.binary) return;
+    if (fromOld && !file.oldLines.length) fromOld = false;
+    else if (!fromOld && !file.newLines.length) fromOld = true;
+    const pane = fromOld ? diffOld : diffNew;
+    const count = fromOld ? file.oldLines.length : file.newLines.length;
+    if (!count) return;
+    diffOverviewFromOld = fromOld;
+    pane.scrollTop = Math.max(
+      0,
+      Math.min(count * diffLineHeight - pane.clientHeight, position),
+    );
+    synchronizeDiff(fromOld);
+  }
+
+  diffOverview.addEventListener("click", (event) => {
+    const bounds = diffOverview.getBoundingClientRect();
+    const file = diffContext?.file;
+    if (
+      !file ||
+      file.binary ||
+      !(file.oldLines.length || file.newLines.length) ||
+      !bounds.height
+    )
+      return;
+    let fromOld = event.clientX < bounds.left + bounds.width / 2;
+    if (fromOld && !file.oldLines.length) fromOld = false;
+    else if (!fromOld && !file.newLines.length) fromOld = true;
+    const pane = fromOld ? diffOld : diffNew;
+    const count = fromOld ? file.oldLines.length : file.newLines.length;
+    const fraction = Math.max(
+      0,
+      Math.min(1, (event.clientY - bounds.top) / bounds.height),
+    );
+    scrollDiffOverview(
+      fraction * count * diffLineHeight - pane.clientHeight / 2,
+      fromOld,
+    );
+    diffOverview.focus();
+  });
+  diffOverview.addEventListener("keydown", (event) => {
+    const pane = diffOverviewFromOld ? diffOld : diffNew;
+    let position: number;
+    switch (event.key) {
+      case "ArrowUp":
+      case "ArrowLeft":
+        position = pane.scrollTop - diffLineHeight;
+        break;
+      case "ArrowDown":
+      case "ArrowRight":
+        position = pane.scrollTop + diffLineHeight;
+        break;
+      case "PageUp":
+        position = pane.scrollTop - pane.clientHeight;
+        break;
+      case "PageDown":
+        position = pane.scrollTop + pane.clientHeight;
+        break;
+      case "Home":
+        position = 0;
+        break;
+      case "End":
+        position = Number.MAX_SAFE_INTEGER;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    scrollDiffOverview(position, diffOverviewFromOld);
+  });
+
+  function drawDiffLinks(): void {
+    updateDiffOverview();
+    const file = diffContext?.file;
+    diffLinks.replaceChildren();
+    const height = diffSplit.clientHeight;
+    if (!file || !height || !file.changes.length) return;
+    diffLinks.setAttribute("viewBox", `0 0 48 ${height}`);
+    const oldTop = diffOld.scrollTop / diffLineHeight;
+    const newTop = diffNew.scrollTop / diffLineHeight;
+    const visible = height / diffLineHeight;
+    let low = 0;
+    let high = file.changes.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      const change = file.changes[middle]!;
+      if (
+        change.oldStart + change.oldCount < oldTop &&
+        change.newStart + change.newCount < newTop
+      )
+        low = middle + 1;
+      else high = middle;
+    }
+    const fragment = document.createDocumentFragment();
+    for (let index = low; index < file.changes.length; index++) {
+      const change = file.changes[index]!;
+      if (
+        change.oldStart > oldTop + visible &&
+        change.newStart > newTop + visible
+      )
+        break;
+      const y1 = change.oldStart * diffLineHeight - diffOld.scrollTop;
+      const y2 =
+        (change.oldStart + change.oldCount) * diffLineHeight -
+        diffOld.scrollTop;
+      const y3 = change.newStart * diffLineHeight - diffNew.scrollTop;
+      const y4 =
+        (change.newStart + change.newCount) * diffLineHeight -
+        diffNew.scrollTop;
+      const link = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "path",
+      );
+      link.setAttribute(
+        "d",
+        `M 0 ${y1} C 24 ${y1}, 24 ${y3}, 48 ${y3} L 48 ${y4} C 24 ${y4}, 24 ${y2}, 0 ${y2} Z`,
+      );
+      fragment.append(link);
+    }
+    diffLinks.append(fragment);
+  }
+
+  function renderDiffFile(file: LocalDiffFile): void {
+    const oldLabel = diffContext?.source === "pull" ? "base" : "HEAD";
+    const newLabel = diffContext?.source === "pull" ? "head" : "working tree";
+    const height = Number.parseFloat(
+      window.getComputedStyle(diffOld).lineHeight,
+    );
+    if (Number.isFinite(height) && height > 0) diffLineHeight = height;
+    const changedOld = new Set<number>();
+    const changedNew = new Set<number>();
+    for (const change of file.changes) {
+      for (
+        let index = change.oldStart;
+        index < change.oldStart + change.oldCount;
+        index++
+      )
+        changedOld.add(index);
+      for (
+        let index = change.newStart;
+        index < change.newStart + change.newCount;
+        index++
+      )
+        changedNew.add(index);
+    }
+    const renderSide = (
+      container: HTMLElement,
+      lines: string[],
+      changed: Set<number>,
+      side: "old" | "new",
+    ): void => {
+      const fragment = document.createDocumentFragment();
+      lines.forEach((text, index) => {
+        const row = document.createElement("div");
+        row.className = `diff-line${changed.has(index) ? (side === "old" ? " removed" : " added") : ""}`;
+        row.dataset.line = String(index + 1);
+        const number = document.createElement("button");
+        number.type = "button";
+        number.textContent = String(index + 1);
+        number.title = "Add this line to review notes";
+        number.setAttribute(
+          "aria-label",
+          `Comment on ${side === "old" ? oldLabel : newLabel} line ${index + 1}`,
+        );
+        const code = document.createElement("span");
+        code.textContent = text;
+        row.append(number, code);
+        fragment.append(row);
+      });
+      container.replaceChildren(fragment);
+      container.scrollTop = 0;
+      container.scrollLeft = 0;
+    };
+    renderSide(diffOld, file.oldLines, changedOld, "old");
+    renderSide(diffNew, file.newLines, changedNew, "new");
+    expectedOldScroll = undefined;
+    expectedNewScroll = undefined;
+    diffChangeIndex = -1;
+    diffScrollAnchor = undefined;
+    updateDiffNavigation();
+    diffFilename.textContent = file.oldPath
+      ? `${file.oldPath} → ${file.path}`
+      : file.path;
+    diffFileStatus.textContent = file.binary
+      ? "Binary file: text comparison is unavailable."
+      : [
+          file.changes.length
+            ? `${file.changes.length} change(s)`
+            : "No text changes.",
+          file.oldNoFinalNewline ? `${oldLabel} has no final newline` : "",
+          file.newNoFinalNewline ? `${newLabel} has no final newline` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+    renderDiffOverview(file);
+    drawDiffLinks();
+  }
+
+  function diffSummary(): string {
+    const context = diffContext;
+    if (!context?.list) return "";
+    if (context.source === "local")
+      return `${context.list.files.length} tracked file(s) changed on ${context.list.machine} (${context.list.repositoryPath}) against HEAD ${context.list.commit.slice(0, 12)}.`;
+    return `${context.list.files.length} file(s) changed in the pull request: base ${context.list.baseCommit.slice(0, 12)} → head ${context.list.headCommit.slice(0, 12)}.`;
+  }
+
+  function receiveDiff(update: LocalDiffUpdate | PullRequestDiffUpdate): void {
+    const context = diffContext;
+    if (
+      !context ||
+      context.id !== update.id ||
+      context.view !== update.view ||
+      context.requestId !== update.requestId ||
+      (context.source === "local" && update.type !== "local-diff") ||
+      (context.source === "pull" &&
+        (update.type !== "pull-diff" || update.url !== context.url))
+    )
+      return;
+    if (update.error) {
+      diffNavigation = undefined;
+      diffError.textContent = update.error;
+      diffError.hidden = false;
+      diffStatus.textContent = "Diff could not be loaded.";
+      updateDiffNavigation();
+      return;
+    }
+    if (update.list) {
+      if (context.source === "local" && update.type === "local-diff")
+        context.list = update.list;
+      else if (context.source === "pull" && update.type === "pull-diff")
+        context.list = update.list;
+      else return;
+      diffStatus.textContent = diffSummary();
+      const selected =
+        update.list.files.find((file) => file.path === context.path) ??
+        update.list.files[0];
+      context.path = selected?.path;
+      renderDiffTree();
+      if (selected) requestDiff(selected.path);
+      else
+        diffFileStatus.textContent =
+          context.source === "local" ? "No tracked changes." : "No PR changes.";
+    } else if (update.file && update.file.path === context.path) {
+      context.file = update.file;
+      diffStatus.textContent = diffSummary();
+      renderDiffFile(update.file);
+      if (diffNavigation !== undefined) {
+        const direction = diffNavigation;
+        if (update.file.changes.length) {
+          diffNavigation = undefined;
+          showDiffChange(direction === 1 ? 0 : update.file.changes.length - 1);
+        } else if (!moveDiffFile(direction)) {
+          diffNavigation = undefined;
+          diffFileStatus.textContent = "No more text changes.";
+          updateDiffNavigation();
+        }
+      }
+    }
+  }
+
+  function mapDiffLine(position: number, fromOld: boolean): number {
+    const changes = diffContext?.file?.changes ?? [];
+    let low = 0;
+    let high = changes.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      const change = changes[middle]!;
+      const end = fromOld
+        ? change.oldStart + change.oldCount
+        : change.newStart + change.newCount;
+      if (end < position) low = middle + 1;
+      else high = middle;
+    }
+    const change = changes[low];
+    if (!change) {
+      const last = changes.at(-1);
+      return last
+        ? position +
+            (fromOld
+              ? last.newStart + last.newCount - last.oldStart - last.oldCount
+              : last.oldStart + last.oldCount - last.newStart - last.newCount)
+        : position;
+    }
+    const start = fromOld ? change.oldStart : change.newStart;
+    const count = fromOld ? change.oldCount : change.newCount;
+    const otherStart = fromOld ? change.newStart : change.oldStart;
+    const otherCount = fromOld ? change.newCount : change.oldCount;
+    if (position < start) return otherStart - (start - position);
+    return count
+      ? otherStart + ((position - start) * otherCount) / count
+      : otherStart;
+  }
+
+  function synchronizeDiff(fromOld: boolean): void {
+    const source = fromOld ? diffOld : diffNew;
+    const target = fromOld ? diffNew : diffOld;
+    const expected = fromOld ? expectedOldScroll : expectedNewScroll;
+    if (fromOld) expectedOldScroll = undefined;
+    else expectedNewScroll = undefined;
+    if (expected !== undefined && Math.abs(source.scrollTop - expected) < 1) {
+      drawDiffLinks();
+      return;
+    }
+    const next = Math.max(
+      0,
+      mapDiffLine(source.scrollTop / diffLineHeight, fromOld) * diffLineHeight,
+    );
+    if (Math.abs(target.scrollTop - next) >= 1) {
+      target.scrollTop = next;
+      if (fromOld) expectedNewScroll = target.scrollTop;
+      else expectedOldScroll = target.scrollTop;
+    }
+    diffScrollAnchor = diffOld.scrollTop / diffLineHeight;
+    diffChangeIndex = -1;
+    updateDiffNavigation();
+    drawDiffLinks();
+  }
+
+  diffOld.addEventListener("scroll", () => synchronizeDiff(true));
+  diffNew.addEventListener("scroll", () => synchronizeDiff(false));
+  for (const [container, side] of [
+    [diffOld, "old"],
+    [diffNew, "new"],
+  ] as const)
+    container.addEventListener("click", (event) => {
+      if (!(event.target instanceof Element)) return;
+      const row = event.target.closest<HTMLElement>(".diff-line");
+      if (!row || !container.contains(row)) return;
+      const line = Number(row.dataset.line);
+      if (Number.isSafeInteger(line) && line > 0) addDiffReference(side, line);
+    });
+  function updateDiffNavigation(): void {
+    const context = diffContext;
+    const files = context?.list?.files ?? [];
+    const fileIndex = files.findIndex((file) => file.path === context?.path);
+    const changes = context?.file?.changes ?? [];
+    const boundary =
+      diffScrollAnchor === undefined
+        ? undefined
+        : diffChangeBoundary(changes, diffScrollAnchor);
+    const before = boundary === undefined ? diffChangeIndex > 0 : boundary > 0;
+    const after =
+      boundary === undefined
+        ? diffChangeIndex + 1 < changes.length
+        : boundary < changes.length;
+    diffPrevious.disabled = !before && fileIndex <= 0;
+    diffNext.disabled = !after && fileIndex >= files.length - 1;
+  }
+
+  function diffChangeBoundary(
+    changes: import("./local-diff").DiffChange[],
+    position: number,
+  ): number {
+    let low = 0;
+    let high = changes.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (changes[middle]!.oldStart < position) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  }
+
+  function showDiffChange(index: number): void {
+    const changes = diffContext?.file?.changes;
+    if (!changes?.[index]) return;
+    diffScrollAnchor = undefined;
+    diffChangeIndex = index;
+    const change = changes[diffChangeIndex]!;
+    diffOld.scrollTop = change.oldStart * diffLineHeight;
+    diffNew.scrollTop = change.newStart * diffLineHeight;
+    expectedOldScroll = diffOld.scrollTop;
+    expectedNewScroll = diffNew.scrollTop;
+    updateDiffNavigation();
+    diffFileStatus.textContent = `Change ${diffChangeIndex + 1} of ${changes.length}`;
+    drawDiffLinks();
+  }
+
+  function moveDiffFile(direction: -1 | 1): boolean {
+    const context = diffContext;
+    const files = context?.list?.files;
+    if (!context || !files) return false;
+    const index = files.findIndex((file) => file.path === context.path);
+    const next = files[index + direction];
+    if (!next) return false;
+    diffNavigation = direction;
+    context.path = next.path;
+    renderDiffTree();
+    requestDiff(next.path);
+    return true;
+  }
+
+  function navigateDiff(direction: -1 | 1): void {
+    const changes = diffContext?.file?.changes ?? [];
+    const boundary =
+      diffScrollAnchor === undefined
+        ? undefined
+        : diffChangeBoundary(changes, diffScrollAnchor);
+    const next =
+      boundary === undefined
+        ? diffChangeIndex + direction
+        : direction === 1
+          ? boundary
+          : boundary - 1;
+    if (next >= 0 && next < changes.length) showDiffChange(next);
+    else moveDiffFile(direction);
+  }
+  diffPrevious.addEventListener("click", () => navigateDiff(-1));
+  diffNext.addEventListener("click", () => navigateDiff(1));
+
+  function resizeDiff(width: number): void {
+    diffWidth = Math.max(0.1, Math.min(0.9, width));
+    diffSplit.style.gridTemplateColumns = `minmax(0, ${diffWidth}fr) 48px minmax(0, ${1 - diffWidth}fr) 24px`;
+    diffDivider.setAttribute(
+      "aria-valuenow",
+      String(Math.round(diffWidth * 100)),
+    );
+    drawDiffLinks();
+  }
+  diffDivider.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    diffDrag = event.pointerId;
+    diffDivider.setPointerCapture?.(event.pointerId);
+  });
+  document.addEventListener("pointermove", (event) => {
+    if (event.pointerId !== diffDrag) return;
+    const bounds = diffSplit.getBoundingClientRect();
+    if (bounds.width > 72)
+      resizeDiff((event.clientX - bounds.left - 24) / (bounds.width - 72));
+  });
+  for (const type of ["pointerup", "pointercancel"] as const)
+    document.addEventListener(type, (event) => {
+      if (event.pointerId === diffDrag) diffDrag = undefined;
+    });
+  diffDivider.addEventListener("lostpointercapture", () => {
+    diffDrag = undefined;
+  });
+  diffDivider.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    resizeDiff(diffWidth + (event.key === "ArrowLeft" ? -0.02 : 0.02));
+  });
+  const resizeDiffLayout = (): void => {
+    if (diffView.hidden) return;
+    resizeDiffTree(diffTreeWidth, false);
+    drawDiffLinks();
+  };
+  window.addEventListener("resize", resizeDiffLayout);
+  if (typeof ResizeObserver !== "undefined") {
+    const observer = new ResizeObserver(resizeDiffLayout);
+    observer.observe(diffLayout);
+    observer.observe(diffSplit);
+  }
+
+  function openDiff(
+    source: { type: "local" } | { type: "pull"; url: string },
+  ): void {
+    const id = state?.activeId;
+    const repository = state?.repositories.find((entry) => entry.id === id);
+    if (!id || !repository) return;
+    const view = activeView();
+    const key =
+      source.type === "pull"
+        ? JSON.stringify([id, "pull", source.url])
+        : JSON.stringify([id, view, sessionGeneration(repository, view)]);
+    showConversation();
+    diffNavigation = undefined;
+    diffContext =
+      source.type === "pull"
+        ? { id, view, key, requestId: "", source: "pull", url: source.url }
+        : { id, view, key, requestId: "", source: "local" };
+    diffNotes.value = diffDrafts.get(key) ?? "";
+    diffHeading.textContent =
+      source.type === "pull" ? "Pull request diff" : "Local diff";
+    diffBack.textContent =
+      source.type === "pull" ? "Back to pull request" : "Back to conversation";
+    diffOldLabel.textContent = source.type === "pull" ? "Base" : "HEAD";
+    diffNewLabel.textContent =
+      source.type === "pull" ? "PR head" : "Working tree";
+    diffOld.setAttribute("aria-label", `${diffOldLabel.textContent} file`);
+    diffNew.setAttribute("aria-label", `${diffNewLabel.textContent} file`);
+    diffReferenceHint.textContent =
+      source.type === "pull"
+        ? "References link to the pull request's base and head commits on GitHub."
+        : "References use paths on the session's execution machine.";
+    diffView.hidden = false;
+    const ariaLabel =
+      source.type === "pull" ? "Pull request diff review" : "Local diff review";
+    diffView.setAttribute("aria-label", ariaLabel);
+    const panel = element("chat-panel", HTMLElement);
+    panel.classList.add("reading-diff");
+    panel.setAttribute("aria-label", ariaLabel);
+    resizeDiffTree(diffTreeWidth, false);
+    requestDiff();
+    updateControls();
+  }
+  openLocalDiff.addEventListener("click", () => {
+    if (!openLocalDiff.disabled) openDiff({ type: "local" });
+  });
+  diffBack.addEventListener("click", () => {
+    const pull = diffContext?.source === "pull" ? diffContext : undefined;
+    closeDiff();
+    if (
+      pull &&
+      selectedDiscussion?.id === pull.id &&
+      selectedDiscussion.url === pull.url
+    )
+      showDiscussion();
+    else if (!question.disabled) question.focus();
+  });
+  element("diff-refresh", HTMLButtonElement).addEventListener("click", () => {
+    diffNavigation = undefined;
+    requestDiff();
+  });
+  diffNotes.addEventListener("input", () => {
+    if (diffContext) diffDrafts.set(diffContext.key, diffNotes.value);
+    updateControls();
+  });
+  diffSend.addEventListener("click", () => {
+    const context = diffContext;
+    if (
+      !context ||
+      diffSend.disabled ||
+      context.id !== state?.activeId ||
+      context.view !== activeView()
+    )
+      return;
+    const pullHeader =
+      context.source === "pull"
+        ? `Pull request: ${context.url}${context.list ? `\nComparison: ${context.list.baseCommit}...${context.list.headCommit}` : ""}\n\n`
+        : "";
+    const text = `${question.value}${question.value.trim() ? "\n\n" : ""}${pullHeader}${diffNotes.value}`;
+    if (text.length > question.maxLength) {
+      diffError.textContent = `The message exceeds ${question.maxLength} characters. Shorten the draft or review notes.`;
+      diffError.hidden = false;
+      return;
+    }
+    question.value = text;
+    question.dispatchEvent(new Event("input", { bubbles: true }));
+    composer.requestSubmit();
+    diffDrafts.delete(context.key);
+    diffNotes.value = "";
+    closeDiff();
+  });
+
   function githubKey(id: string): string {
     return JSON.stringify([id, githubSection]);
   }
@@ -2826,6 +3806,7 @@ declare function acquireVsCodeApi(): {
       }
       selectedDiscussion = undefined;
       discussionReady = false;
+      discussionDiff.hidden = true;
       discussionContent.replaceChildren();
       commentForm.hidden = true;
       commentBody.value = "";
@@ -2840,6 +3821,7 @@ declare function acquireVsCodeApi(): {
   function showDiscussion(): void {
     if (!selectedDiscussion || selectedDiscussion.id !== state?.activeId)
       return;
+    if (diffContext) closeDiff();
     const panel = element("chat-panel", HTMLElement);
     panel.classList.add("reading-discussion");
     panel.setAttribute("aria-label", "GitHub issue or pull request");
@@ -2852,6 +3834,9 @@ declare function acquireVsCodeApi(): {
     if (!id) return;
     selectedDiscussion = { id, url };
     discussionReady = false;
+    discussionDiff.hidden =
+      !URL.canParse(url) ||
+      !/^\/[^/]+\/[^/]+\/pull\/[1-9]\d*\/?$/.test(new URL(url).pathname);
     const key = JSON.stringify([id, url]);
     if (!commentDrafts.has(key)) {
       commentDrafts.set(key, { text: "", published: [] });
@@ -2877,6 +3862,10 @@ declare function acquireVsCodeApi(): {
   discussionShow.addEventListener("click", showDiscussion);
   discussionRefresh.addEventListener("click", () => {
     if (selectedDiscussion) requestDiscussion(selectedDiscussion.url);
+  });
+  discussionDiff.addEventListener("click", () => {
+    if (selectedDiscussion && !discussionDiff.hidden)
+      openDiff({ type: "pull", url: selectedDiscussion.url });
   });
   discussionExternal.addEventListener("click", () => {
     if (selectedDiscussion) {
@@ -3943,10 +4932,17 @@ declare function acquireVsCodeApi(): {
         | GitHubCommentUpdate
         | import("./settings").SettingsState
         | import("./system-memory").MemoryUpdate
+        | LocalDiffUpdate
+        | PullRequestDiffUpdate
       >,
     ) => {
       if (event.data.type === "state") {
         render(event.data.state);
+      } else if (
+        event.data.type === "local-diff" ||
+        event.data.type === "pull-diff"
+      ) {
+        receiveDiff(event.data);
       } else if (event.data.type === "execution-configuration-saved") {
         if (
           executionConfigurationState !== "saving" ||
@@ -4137,6 +5133,9 @@ declare function acquireVsCodeApi(): {
             if (draft) appendPublishedComments(draft, true);
           }
         }
+        const kind = update.kind ?? update.discussion?.kind;
+        if (update.status === "ready" && kind)
+          discussionDiff.hidden = kind !== "PullRequest";
         updateCommentControls();
       } else if (event.data.type === "github") {
         const update = event.data;

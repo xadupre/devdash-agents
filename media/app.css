@@ -240,6 +240,243 @@ body.resizing {
   display: none;
 }
 
+#chat-panel.reading-diff > :not(#local-diff-view) {
+  display: none;
+}
+
+#local-diff-view:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  height: 100%;
+  padding: 12px;
+}
+
+.diff-toolbar,
+.diff-file-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+#diff-status,
+#diff-file-status {
+  margin: 0;
+  color: var(--vscode-descriptionForeground);
+}
+
+#diff-error {
+  margin: 0;
+  color: var(--vscode-errorForeground);
+  white-space: pre-wrap;
+}
+
+#diff-layout {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+#diff-tree {
+  width: 180px;
+  flex: 0 0 180px;
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid var(--vscode-panel-border);
+}
+
+#diff-tree-divider {
+  flex: 0 0 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+#diff-tree-divider:hover,
+#diff-tree-divider:focus-visible,
+#diff-tree-divider.dragging {
+  background: var(--vscode-focusBorder, #007fd4);
+}
+
+#diff-layout.resizing-tree {
+  user-select: none;
+}
+
+#diff-tree details {
+  padding-left: 12px;
+}
+
+#diff-tree summary {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#diff-tree button {
+  display: block;
+  width: 100%;
+  border: 0;
+  text-align: left;
+  white-space: nowrap;
+  background: transparent;
+  color: var(--vscode-foreground);
+}
+
+#diff-tree button[aria-current="true"] {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+#diff-file {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.diff-file-heading {
+  justify-content: space-between;
+}
+
+#diff-filename {
+  overflow-wrap: anywhere;
+}
+
+#diff-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr) 24px;
+  flex: 1;
+  min-height: 0;
+}
+
+.diff-code {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid var(--vscode-panel-border);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, 13px);
+  line-height: max(20px, 1.5em);
+  tab-size: 4;
+}
+
+.diff-line {
+  display: flex;
+  width: max-content;
+  min-width: 100%;
+  height: max(20px, 1.5em);
+  white-space: pre;
+}
+
+.diff-line button {
+  position: sticky;
+  left: 0;
+  flex: 0 0 5em;
+  padding: 0 6px;
+  border: 0;
+  border-right: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editorLineNumber-foreground);
+  font: inherit;
+  text-align: right;
+}
+
+.diff-line span {
+  padding: 0 6px;
+}
+
+.diff-line.removed {
+  background: var(--vscode-diffEditor-removedLineBackground, #b83b3b33);
+}
+
+.diff-line.added {
+  background: var(--vscode-diffEditor-insertedLineBackground, #2ea04333);
+}
+
+#diff-divider {
+  position: relative;
+  cursor: col-resize;
+  touch-action: none;
+  border-inline: 1px solid var(--vscode-panel-border);
+}
+
+#diff-divider:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+}
+
+#diff-links {
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+#diff-links path {
+  fill: var(--vscode-diffEditor-insertedLineBackground, #2ea04333);
+  stroke: var(--vscode-diffEditor-diagonalFill, #8888);
+  stroke-width: 1;
+}
+
+#diff-overview {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--vscode-panel-border);
+  cursor: pointer;
+}
+
+#diff-overview[aria-disabled="true"] {
+  cursor: default;
+}
+
+#diff-overview:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -2px;
+}
+
+#diff-overview-marks {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+#diff-overview-marks path {
+  vector-effect: non-scaling-stroke;
+  stroke-width: 2px;
+}
+
+#diff-overview-removed {
+  fill: var(--vscode-editorOverviewRuler-deletedForeground, #e06c75);
+  stroke: var(--vscode-editorOverviewRuler-deletedForeground, #e06c75);
+}
+
+#diff-overview-added {
+  fill: var(--vscode-editorOverviewRuler-addedForeground, #2ca653);
+  stroke: var(--vscode-editorOverviewRuler-addedForeground, #2ca653);
+}
+
+.diff-overview-window {
+  position: absolute;
+  width: 50%;
+  border-block: 1px solid var(--vscode-focusBorder, #007fd4);
+  background: var(--vscode-scrollbarSlider-background, #80808040);
+  pointer-events: none;
+}
+
+#diff-overview-old-window {
+  left: 0;
+}
+
+#diff-overview-new-window {
+  right: 0;
+}
+
+#diff-notes {
+  resize: vertical;
+  min-height: 3em;
+  max-height: 30%;
+}
+
 #github-discussion:not([hidden]) {
   display: flex;
   flex-direction: column;

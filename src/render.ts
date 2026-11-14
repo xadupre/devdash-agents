@@ -173,10 +173,43 @@ export function renderApplication(resources: {
 <body>
 <main class="application">
   <section id="chat-panel" aria-label="Copilot conversation">
+    <section id="local-diff-view" aria-label="Local diff review" hidden>
+      <div class="diff-toolbar">
+        <button id="diff-back" type="button">Back to conversation</button>
+        <strong id="diff-heading">Local diff</strong>
+        <button id="diff-refresh" type="button">Refresh</button>
+        <button id="diff-previous" type="button" disabled>Previous change</button>
+        <button id="diff-next" type="button" disabled>Next change</button>
+      </div>
+      <p id="diff-status" role="status"></p>
+      <p id="diff-error" role="alert" hidden></p>
+      <div id="diff-layout">
+        <nav id="diff-tree" aria-label="Changed files"></nav>
+        <div id="diff-tree-divider" role="separator" aria-label="Resize changed files panel" aria-orientation="vertical" aria-controls="diff-tree" aria-valuemin="80" aria-valuemax="700" aria-valuenow="180" tabindex="0" title="Drag or use the arrow keys to resize the file panel"></div>
+        <div id="diff-file">
+          <div class="diff-file-heading"><span id="diff-old-label">HEAD</span><strong id="diff-filename">Select a file</strong><span id="diff-new-label">Working tree</span></div>
+          <p id="diff-file-status"></p>
+          <div id="diff-split">
+            <div id="diff-old" class="diff-code" tabindex="0" aria-label="HEAD file"></div>
+            <div id="diff-divider" role="separator" aria-label="Resize diff sides" aria-orientation="vertical" aria-valuemin="10" aria-valuemax="90" aria-valuenow="50" tabindex="0"><svg id="diff-links" aria-hidden="true"></svg></div>
+            <div id="diff-new" class="diff-code" tabindex="0" aria-label="Working tree file"></div>
+            <div id="diff-overview" role="slider" aria-label="File change overview" aria-orientation="vertical" aria-controls="diff-old diff-new" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-disabled="true" tabindex="-1" title="Click to scroll. Removed changes are on the left; added changes are on the right.">
+              <svg id="diff-overview-marks" viewBox="0 0 2 10000" preserveAspectRatio="none" aria-hidden="true"><path id="diff-overview-removed"></path><path id="diff-overview-added"></path></svg>
+              <span id="diff-overview-old-window" class="diff-overview-window" hidden></span>
+              <span id="diff-overview-new-window" class="diff-overview-window" hidden></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <label for="diff-notes">Review notes</label>
+      <textarea id="diff-notes" rows="4" maxlength="20000" placeholder="Click a line to add a file reference, then write your comment."></textarea>
+      <div class="diff-toolbar"><span id="diff-reference-hint">References use paths on the session's execution machine.</span><button id="diff-send" type="button" disabled>Send notes to agent</button></div>
+    </section>
     <section id="github-discussion" aria-label="GitHub issue or pull request" hidden>
       <div class="github-toolbar">
         <button id="github-discussion-back" type="button">Back to conversation</button>
         <button id="github-discussion-refresh" type="button">Refresh</button>
+        <button id="github-discussion-diff" type="button" aria-controls="local-diff-view" hidden>Review PR diff</button>
         <button id="github-discussion-external" type="button" aria-label="Open on GitHub" title="Open on GitHub in browser">&#8599;</button>
       </div>
       <p id="github-discussion-status" role="status" tabindex="-1"></p>
@@ -209,6 +242,7 @@ export function renderApplication(resources: {
         <label><input type="checkbox" value="system"> Session / events (JSON)</label>
       </fieldset>
       <button id="github-discussion-show" type="button" aria-controls="github-discussion" hidden>Show issue / PR</button>
+      <button id="open-local-diff" type="button" aria-controls="local-diff-view" disabled>Review diff</button>
       <nav id="prompt-navigation" aria-label="Prompt navigation">
         <button id="previous-prompt" type="button" title="Scroll to the previous prompt" disabled>&#8593; Prompt</button>
         <button id="next-prompt" type="button" title="Scroll to the next prompt" disabled>&#8595; Prompt</button>

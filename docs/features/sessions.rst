@@ -34,6 +34,30 @@ and tool durations for Copilot and local sessions. Hover over the band or a segm
 for request details, per-tool totals and generation throughput in tokens per second
 when token usage is available. Overlapping work occupies separate thin lanes.
 
+Review the working-tree diff
+----------------------------
+
+With a session open, **Review diff** compares its harness machine's repository
+against HEAD. It includes staged and unstaged changes to tracked files, not
+untracked files. A rename is shown as a deletion and an addition. The folder tree
+selects files; the two unpadded views scroll together, highlight changes and draw
+connections between them. Drag the separators, or use their arrow keys, to resize
+the file tree and the two sides. The overview bar covers the entire file: removed
+lines appear on the left, added lines on the right, and shaded areas show the
+visible portions. Click it or use the arrow, Page Up/Down, Home and End keys to
+scroll. **Previous change** and **Next change** navigate across changed files.
+Sessions without a recorded execution-machine assignment must be started or
+resumed with an assignment before their diff can be reviewed.
+
+Click a line to add a relative file-and-line reference to the review notes,
+then write comments and choose **Send notes to agent**. Any existing conversation
+draft is included in the message. References to old lines are marked with the
+HEAD commit; file links identify the working-tree path. Notes stay with the
+selected session while the application remains open, and errors are shown in the viewer.
+Use **Refresh** if the repository changes. Binary files are listed but not shown
+as text. Files over 10,000 lines or 4 MiB of diff output and diffs over 5,000
+files are reported rather than truncated.
+
 Multiple application instances
 ------------------------------
 

@@ -1,9 +1,18 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { isExternalUrl } from "./links";
+import {
+  compareDiffText,
+  isDiffPath,
+  MAX_DIFF_BYTES,
+  type DiffEntry,
+  type DiffFile,
+} from "./diff";
+import type { SessionView } from "./application";
 
 export type GitHubSection =
   "issues" | "reviews" | "oldest-prs" | "comments" | "commits" | "mentions";
@@ -70,7 +79,36 @@ export interface GitHubDiscussionUpdate {
   url: string;
   status: "loading" | "ready" | "error";
   discussion?: GitHubDiscussion;
+  kind?: GitHubDiscussion["kind"];
   html?: string;
+  error?: string;
+}
+
+export interface PullRequestDiffList {
+  url: string;
+  baseCommit: string;
+  headCommit: string;
+  files: DiffEntry[];
+}
+
+interface PullRequestDiffEntry extends DiffEntry {
+  oid: string;
+}
+
+export interface PullRequestDiffSnapshot {
+  list: PullRequestDiffList;
+  target: { host: string; owner: string; name: string; number: number };
+  entries: PullRequestDiffEntry[];
+}
+
+export interface PullRequestDiffUpdate {
+  type: "pull-diff";
+  id: string;
+  view: SessionView;
+  url: string;
+  requestId: string;
+  list?: PullRequestDiffList;
+  file?: DiffFile;
   error?: string;
 }
 
@@ -102,6 +140,16 @@ export function isGitHubDiscussionUrl(value: unknown): value is string {
     /^\/[^/]+\/[^/]+\/(?:issues|pull)\/([1-9]\d*)\/?$/,
   );
   return Boolean(match && Number.isSafeInteger(Number(match[1])));
+}
+
+export function isGitHubPullRequestUrl(value: unknown): value is string {
+  if (!isGitHubDiscussionUrl(value)) return false;
+  const parsed = new URL(value);
+  return (
+    !parsed.username &&
+    !parsed.password &&
+    /^\/[^/]+\/[^/]+\/pull\/[1-9]\d*\/?$/.test(parsed.pathname)
+  );
 }
 
 export type CommandRunner = (
@@ -210,6 +258,8 @@ const issueFields = `id number title url author { login } updatedAt ${commentsFi
 const pullFields = `${issueFields}
   reviews(last:20) { ${pageFields} nodes { ${reviewFields} } }`;
 const nextPageFields = "pageInfo { hasNextPage endCursor }";
+const hashPattern = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
+const MAX_PULL_FILES = 3_000;
 
 interface Identity {
   owner: string;
@@ -244,6 +294,99 @@ function commentCursor(cursor?: string): CommentCursor {
     commentedDone: value.commentedDone,
     reviewedDone: value.reviewedDone,
   };
+}
+
+function pullDiffRefs(value: unknown): {
+  base: string;
+  head: string;
+  changedFiles: number;
+} {
+  const pull = record(value);
+  const base = text(record(pull.base).sha);
+  const head = text(record(pull.head).sha);
+  const changedFiles = pull.changed_files;
+  if (
+    !hashPattern.test(base) ||
+    !hashPattern.test(head) ||
+    typeof changedFiles !== "number" ||
+    !Number.isSafeInteger(changedFiles) ||
+    changedFiles < 0
+  )
+    throw new Error("Invalid pull request diff metadata returned by GitHub.");
+  return { base, head, changedFiles };
+}
+
+function pullDiffEntry(value: unknown): PullRequestDiffEntry {
+  const file = record(value);
+  const path = file.filename;
+  const oid = text(file.sha);
+  const status = text(file.status);
+  const statuses: Record<string, DiffEntry["status"]> = {
+    added: "A",
+    removed: "D",
+    modified: "M",
+    renamed: "R",
+    copied: "C",
+    changed: "T",
+    unchanged: "M",
+  };
+  const mapped = Object.hasOwn(statuses, status) ? statuses[status] : undefined;
+  if (
+    !mapped ||
+    !isDiffPath(path) ||
+    path.includes("\ufffd") ||
+    !hashPattern.test(oid)
+  )
+    throw new Error("GitHub returned an unsupported pull request file.");
+  if (mapped === "R" || mapped === "C") {
+    if (
+      !isDiffPath(file.previous_filename) ||
+      file.previous_filename.includes("\ufffd")
+    )
+      throw new Error("GitHub returned an invalid previous file path.");
+    return { path, status: mapped, oldPath: file.previous_filename, oid };
+  }
+  return { path, status: mapped, oid };
+}
+
+function publicPullDiffEntry(entry: PullRequestDiffEntry): DiffEntry {
+  return {
+    path: entry.path,
+    status: entry.status,
+    ...(entry.oldPath !== undefined ? { oldPath: entry.oldPath } : {}),
+  };
+}
+
+interface PullDiffBlob {
+  oid: string;
+  size: number;
+  binary: boolean;
+  truncated: boolean;
+  content: string | null;
+}
+
+function pullDiffBlob(value: unknown): PullDiffBlob {
+  const blob = record(value);
+  if (blob.__typename !== "Blob")
+    throw new Error(
+      "The pull request file is not a Git blob; submodules cannot be displayed as text.",
+    );
+  const oid = text(blob.oid);
+  const size = blob.byteSize;
+  const binary = blob.isBinary;
+  const truncated = blob.isTruncated;
+  const content = blob.text;
+  if (
+    !hashPattern.test(oid) ||
+    typeof size !== "number" ||
+    !Number.isSafeInteger(size) ||
+    size < 0 ||
+    typeof binary !== "boolean" ||
+    typeof truncated !== "boolean" ||
+    (content !== null && typeof content !== "string")
+  )
+    throw new Error("Invalid GitHub blob metadata.");
+  return { oid, size, binary, truncated, content };
 }
 
 export class GitHubRepository {
@@ -288,6 +431,192 @@ export class GitHubRepository {
       name,
       number: Number(targetUrl.pathname.split("/")[4]),
     };
+  }
+
+  private pullDiffApi(
+    target: PullRequestDiffSnapshot["target"],
+    endpoint: string,
+    signal: AbortSignal,
+    args: string[] = [],
+  ): Promise<string> {
+    return this.run(
+      "gh",
+      [
+        "api",
+        "--hostname",
+        target.host,
+        `repos/${target.owner}/${target.name}/${endpoint}`,
+        ...args,
+      ],
+      this.cwd,
+      signal,
+    );
+  }
+
+  async loadPullRequestDiff(
+    url: string,
+    signal: AbortSignal,
+  ): Promise<PullRequestDiffSnapshot> {
+    if (!isGitHubPullRequestUrl(url))
+      throw new Error("Invalid GitHub pull request URL.");
+    const target = await this.discussionTarget(url, signal);
+    const refs = pullDiffRefs(
+      JSON.parse(
+        await this.pullDiffApi(target, `pulls/${target.number}`, signal),
+      ),
+    );
+    if (refs.changedFiles > MAX_PULL_FILES)
+      throw new Error(
+        `The pull request contains more than ${MAX_PULL_FILES} changed files; GitHub does not provide a complete file list.`,
+      );
+    const baseCommit = (
+      await this.pullDiffApi(
+        target,
+        `compare/${refs.base}...${refs.head}?per_page=1`,
+        signal,
+        ["--jq", ".merge_base_commit.sha"],
+      )
+    ).trim();
+    if (!hashPattern.test(baseCommit))
+      throw new Error("GitHub returned an invalid pull request merge base.");
+    const entries: PullRequestDiffEntry[] = [];
+    for (let page = 1; entries.length < refs.changedFiles; page++) {
+      const response: unknown = JSON.parse(
+        await this.pullDiffApi(
+          target,
+          `pulls/${target.number}/files?per_page=100&page=${page}`,
+          signal,
+          ["--jq", "map({filename, status, previous_filename, sha})"],
+        ),
+      );
+      if (!Array.isArray(response) || !response.length || response.length > 100)
+        throw new Error(
+          "GitHub returned an incomplete pull request file list.",
+        );
+      entries.push(...response.map(pullDiffEntry));
+      if (entries.length > refs.changedFiles)
+        throw new Error(
+          "The pull request changed while loading its diff. Refresh and try again.",
+        );
+    }
+    if (new Set(entries.map((entry) => entry.path)).size !== entries.length)
+      throw new Error("GitHub returned duplicate pull request file paths.");
+    const latest = pullDiffRefs(
+      JSON.parse(
+        await this.pullDiffApi(target, `pulls/${target.number}`, signal),
+      ),
+    );
+    if (
+      latest.base !== refs.base ||
+      latest.head !== refs.head ||
+      latest.changedFiles !== refs.changedFiles
+    )
+      throw new Error(
+        "The pull request changed while loading its diff. Refresh and try again.",
+      );
+    signal.throwIfAborted();
+    return {
+      target,
+      entries,
+      list: {
+        url,
+        baseCommit,
+        headCommit: refs.head,
+        files: entries.map(publicPullDiffEntry),
+      },
+    };
+  }
+
+  async loadPullRequestDiffFile(
+    snapshot: PullRequestDiffSnapshot,
+    path: string,
+    signal: AbortSignal,
+  ): Promise<DiffFile> {
+    if (!isDiffPath(path)) throw new Error("Invalid pull request file path.");
+    const entry = snapshot.entries.find((file) => file.path === path);
+    if (!entry)
+      throw new Error(
+        "The file is not in this pull request diff. Refresh and try again.",
+      );
+    const { target, list } = snapshot;
+    const data = await this.graphql(
+      target,
+      `query($owner:String!,$name:String!,$old:String!,$new:String!,$readOld:Boolean!,$readNew:Boolean!) {
+        repository(owner:$owner,name:$name) {
+          old:object(expression:$old) @include(if:$readOld) {
+            __typename ... on Blob { oid byteSize isBinary isTruncated text }
+          }
+          new:object(expression:$new) @include(if:$readNew) {
+            __typename ... on Blob { oid byteSize isBinary isTruncated text }
+          }
+        }
+      }`,
+      {
+        owner: target.owner,
+        name: target.name,
+        old: `${list.baseCommit}:${entry.oldPath ?? entry.path}`,
+        new: `${list.headCommit}:${entry.path}`,
+        readOld: entry.status !== "A",
+        readNew: entry.status !== "D",
+      },
+      signal,
+    );
+    const repository = record(data.repository);
+    const oldBlob =
+      entry.status === "A" ? undefined : pullDiffBlob(repository.old);
+    const newBlob =
+      entry.status === "D" ? undefined : pullDiffBlob(repository.new);
+    if (newBlob && newBlob.oid.toLowerCase() !== entry.oid.toLowerCase())
+      throw new Error(
+        "The pull request file does not match the loaded snapshot. Refresh and try again.",
+      );
+    const file = publicPullDiffEntry(entry);
+    if (oldBlob?.binary || newBlob?.binary)
+      return {
+        ...file,
+        oldLines: [],
+        newLines: [],
+        changes: [],
+        binary: true,
+        oldNoFinalNewline: false,
+        newNoFinalNewline: false,
+      };
+    const readBlob = async (
+      blob: PullDiffBlob | undefined,
+    ): Promise<string> => {
+      if (!blob) return "";
+      if (blob.size > MAX_DIFF_BYTES)
+        throw new Error(
+          "The changed file is too large to display in the diff viewer.",
+        );
+      const content = blob.truncated
+        ? await this.pullDiffApi(target, `git/blobs/${blob.oid}`, signal, [
+            "--header",
+            "Accept: application/vnd.github.raw+json",
+          ])
+        : blob.content;
+      if (
+        typeof content !== "string" ||
+        Buffer.byteLength(content, "utf8") !== blob.size
+      )
+        throw new Error(
+          "GitHub returned incomplete or unsupported UTF-8 file content.",
+        );
+      const actual = createHash(blob.oid.length === 40 ? "sha1" : "sha256")
+        .update(`blob ${blob.size}\0`)
+        .update(content, "utf8")
+        .digest("hex");
+      if (actual !== blob.oid.toLowerCase())
+        throw new Error(
+          "GitHub returned incomplete or unsupported UTF-8 file content.",
+        );
+      return content;
+    };
+    const [oldText, newText] = await Promise.all([
+      readBlob(oldBlob),
+      readBlob(newBlob),
+    ]);
+    return compareDiffText(file, oldText, newText, signal);
   }
 
   async postComment(
