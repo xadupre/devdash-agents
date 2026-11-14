@@ -53,7 +53,7 @@ async function main(): Promise<void> {
   const worker = new LocalWorker(
     resolveWorkerExecutable(values.worker, resolve(__dirname, "../..")),
     [],
-    120_000,
+    125_000,
     (error) => {
       if (!lifetime.signal.aborted) {
         console.error(error.message);

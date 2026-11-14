@@ -103,6 +103,52 @@ test("service generates JSON and SSE through the real worker transport", async (
   assert.ok(chunks.every((chunk) => chunk.id === chunks[0].id));
 });
 
+test("service returns safe partial final output on max-length truncation", async (t) => {
+  const outputs = [
+    "<|channel|>final<|message|>Partial answer",
+    "<|channel|>final<|message|>Partial streamed answer",
+    "<|channel|>analysis<|message|>unfinished reasoning",
+    '<|start|>assistant to=inspect_repository<|channel|>commentary<|message|>{"path":"README.md"}',
+  ];
+  const service = await setup(t, {
+    async generateChat(_messages, onToken) {
+      onToken(outputs.shift()!);
+      return {
+        cachedTokens: 0,
+        generatedTokens: 4,
+        cacheTokens: 1024,
+        contextTokens: 1024,
+      };
+    },
+    async release() {},
+  });
+  const json = await service.post(request);
+  assert.equal(json.status, 200);
+  const result = await json.json();
+  assert.equal(result.choices[0].message.content, "Partial answer");
+  assert.equal(result.choices[0].finish_reason, "length");
+
+  const streamed = await service.post({ ...request, stream: true });
+  assert.equal(streamed.status, 200);
+  const chunks = (await streamed.text())
+    .split("\n\n")
+    .filter((line) => line && line !== "data: [DONE]")
+    .map((line) => JSON.parse(line.slice(6)));
+  assert.equal(
+    chunks.map((chunk) => chunk.choices[0].delta.content ?? "").join(""),
+    "Partial streamed answer",
+  );
+  assert.equal(chunks.at(-1).choices[0].finish_reason, "length");
+
+  const reasoning = await service.post(request);
+  assert.equal((await reasoning.json()).choices[0].message.content, "");
+  const toolCall = await service.post({ ...request, tools });
+  const toolChoice = (await toolCall.json()).choices[0];
+  assert.equal(toolChoice.message.content, "");
+  assert.equal(toolChoice.message.tool_calls, undefined);
+  assert.equal(toolChoice.finish_reason, "length");
+});
+
 test("service hands functions back to Copilot and translates tool history without executing it", async (t) => {
   const histories: LocalChatMessage[][] = [];
   const sessions: string[] = [];
@@ -207,6 +253,21 @@ test("service rejects invalid input before inference and remains usable", async 
               id: "x",
               type: "function",
               function: { name: "x", arguments: "{" },
+            },
+          ],
+        },
+      ],
+    },
+    {
+      ...request,
+      messages: [
+        {
+          role: "assistant",
+          tool_calls: [
+            {
+              id: "x",
+              type: "function",
+              function: { name: "x", arguments: "[]" },
             },
           ],
         },
@@ -393,6 +454,25 @@ test("service hides worker errors, frees caches, and does not return unknown too
   // tool_choice=none does not advertise any tool definitions.
   const plain = await service.post({ ...request, tools, tool_choice: "none" });
   assert.equal(plain.status, 200);
+});
+
+test("service returns server errors for invalid model-generated tool arguments", async (t) => {
+  const outputs = [
+    '<tool_call>{"name":"inspect_repository","arguments":[]}</tool_call>',
+    '{"name":"inspect_repository","arguments":[]}',
+  ];
+  const service = await setup(t, {
+    async generateChat(_messages, onToken) {
+      onToken(outputs.shift()!);
+      return { cachedTokens: 0, generatedTokens: 2, cacheTokens: 3 };
+    },
+    async release() {},
+  });
+  for (let index = 0; index < 2; index++) {
+    const response = await service.post({ ...request, tools });
+    assert.equal(response.status, 500);
+    assert.equal((await response.json()).error.type, "server_error");
+  }
 });
 
 test("Copilot custom provider preserves the normal harness and permission defaults", () => {

@@ -38,6 +38,16 @@ function toolCall(value: unknown): {
   return { name: value.name, arguments: value.arguments };
 }
 
+function modelToolCall(value: unknown): ReturnType<typeof toolCall> {
+  try {
+    return toolCall(value);
+  } catch (error) {
+    if (error instanceof RequestError)
+      throw new Error("Invalid model function call.", { cause: error });
+    throw error;
+  }
+}
+
 function text(value: unknown): string {
   if (typeof value === "string") return value;
   if (
@@ -335,21 +345,28 @@ export async function startWorkerService(options: {
           session,
         );
         controller.signal.throwIfAborted();
-        parser.finish();
+        const truncated =
+          usage.contextTokens !== undefined && usage.contextTokens >= maxLength;
+        if (!parser.finish(truncated) && truncated) {
+          content = "";
+          commentary = "";
+        }
         const trimmed = content.trim();
         let call: ReturnType<typeof toolCall> | undefined;
         if (tools.size && trimmed.startsWith("<tool_call>")) {
           if (!trimmed.endsWith("</tool_call>"))
-            throw new Error("Incomplete model function call.");
-          call = toolCall(JSON.parse(trimmed.slice(11, -12)) as unknown);
+            if (!truncated) throw new Error("Incomplete model function call.");
+          if (trimmed.endsWith("</tool_call>"))
+            call = modelToolCall(JSON.parse(trimmed.slice(11, -12)) as unknown);
         } else if (tools.size && trimmed.startsWith("{")) {
           // Harmony tool handoffs are normalized to a bare JSON object.
           try {
             const value: unknown = JSON.parse(trimmed);
             if (object(value) && "name" in value && "arguments" in value)
-              call = toolCall(value);
+              call = modelToolCall(value);
           } catch (error) {
             if (!(error instanceof SyntaxError)) throw error;
+            if (truncated) content = "";
           }
         }
         if (call && !tools.has(call.name))
@@ -370,8 +387,7 @@ export async function startWorkerService(options: {
         generated = false;
         const finishReason = calls
           ? "tool_calls"
-          : usage.contextTokens !== undefined &&
-              usage.contextTokens >= maxLength
+          : truncated
             ? "length"
             : "stop";
         if (stream) {

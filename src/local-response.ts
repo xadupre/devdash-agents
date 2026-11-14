@@ -135,7 +135,34 @@ export class LocalResponse {
     }
   }
 
-  finish(): void {
+  finish(truncated = false): boolean {
+    if (truncated) {
+      if (
+        this.toolClose ||
+        this.phase === "think" ||
+        this.phase === "header" ||
+        this.phase === "next" ||
+        (this.phase === "body" &&
+          (this.recipient !== undefined || this.channel !== "final"))
+      ) {
+        this.pending = "";
+        return false;
+      }
+      const markers = [
+        "<|im_end|>",
+        "<|end|>",
+        "<|fim_suffix|>",
+        "<|return|>",
+        "<|endoftext|>",
+        ...LOCAL_TOOL_MARKERS.map(([open, close]) => open + close),
+        ...LOCAL_TOOL_MARKERS.map(([open]) => open),
+      ];
+      if (!markers.some((marker) => marker.startsWith(this.pending)))
+        this.emit(this.pending);
+      this.pending = "";
+      this.phase = "done";
+      return true;
+    }
     if (this.phase === "think")
       throw new Error(
         "The local model response ended before closing its <think> block.",
@@ -157,6 +184,7 @@ export class LocalResponse {
       );
     } else if (this.phase !== "done") this.emit(this.pending);
     this.pending = "";
+    return true;
   }
 
   private scan(markers: string[]): { index: number; marker?: string } {
