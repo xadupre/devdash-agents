@@ -1031,6 +1031,7 @@ declare function acquireVsCodeApi(): {
   let executionEditVersion = 0;
   let savingExecutionEditVersion = 0;
   const editorEditVersions = { machine: 0, worker: 0 };
+  let workerEditorDirty = false;
   let pendingExecutionSave:
     | {
         requestId: string;
@@ -1038,6 +1039,7 @@ declare function acquireVsCodeApi(): {
         id: string;
         operation: "save" | "delete";
         editVersion: number;
+        preserveEditor: boolean;
       }
     | undefined;
   const setExecutionConfigurationStatus = (
@@ -1076,6 +1078,7 @@ declare function acquireVsCodeApi(): {
     editor: "machine" | "worker",
     id: string,
     operation: "save" | "delete" = "save",
+    preserveEditor = false,
   ): void => {
     if (executionConfigurationState === "saving") return;
     const requestId = crypto.randomUUID();
@@ -1085,6 +1088,7 @@ declare function acquireVsCodeApi(): {
       id,
       operation,
       editVersion: editorEditVersions[editor],
+      preserveEditor,
     };
     savingExecutionEditVersion = executionEditVersion;
     setExecutionConfigurationStatus("Saving machines and workers...", "saving");
@@ -1122,6 +1126,7 @@ declare function acquireVsCodeApi(): {
     noteExecutionEdit();
   };
   const noteWorkerEdit = (): void => {
+    workerEditorDirty = true;
     editorEditVersions.worker++;
     noteExecutionEdit();
   };
@@ -1298,6 +1303,8 @@ declare function acquireVsCodeApi(): {
       },
       "worker",
       id,
+      "save",
+      workerEditorDirty,
     );
   });
   const workerKindHint = element("worker-kind-hint", HTMLElement);
@@ -1334,6 +1341,7 @@ declare function acquireVsCodeApi(): {
   workerKind.addEventListener("change", updateWorkerKind);
   workerMachine.addEventListener("change", updateWorkerKind);
   const fillWorkerForm = (): void => {
+    workerEditorDirty = false;
     const worker = settingsState?.execution?.workers.find(
       (entry) => entry.id === workerEntry.value,
     );
@@ -3959,21 +3967,29 @@ declare function acquireVsCodeApi(): {
           const id = saved.editor === "machine" ? machineFields.id : workerId;
           const newerEditorEdits =
             editorEditVersions[saved.editor] !== saved.editVersion;
-          if (!newerEditorEdits) {
-            entry.value = saved.operation === "delete" ? "" : saved.id;
-            if (saved.editor === "machine") fillMachineForm();
-            else fillWorkerForm();
-          } else if (id.value.trim() === saved.id) {
-            // Reconcile identity without replacing newer field values.
-            entry.value = saved.operation === "delete" ? "" : saved.id;
-            id.readOnly = saved.operation !== "delete";
+          if (!saved.preserveEditor) {
+            if (!newerEditorEdits) {
+              entry.value = saved.operation === "delete" ? "" : saved.id;
+              if (saved.editor === "machine") fillMachineForm();
+              else fillWorkerForm();
+            } else if (id.value.trim() === saved.id) {
+              // Reconcile identity without replacing newer field values.
+              entry.value = saved.operation === "delete" ? "" : saved.id;
+              id.readOnly = saved.operation !== "delete";
+            }
           }
         }
-        const newerEdits = executionEditVersion !== savingExecutionEditVersion;
+        const preservedWorkerDraft =
+          saved.editor === "worker" && saved.preserveEditor;
+        const newerEdits =
+          executionEditVersion !== savingExecutionEditVersion ||
+          preservedWorkerDraft;
         setExecutionConfigurationStatus(
-          newerEdits
-            ? `${label} saved; newer edits are unsaved.`
-            : `${label} saved.`,
+          preservedWorkerDraft
+            ? "Worker settings saved; existing worker draft remains unsaved."
+            : newerEdits
+              ? `${label} saved; newer edits are unsaved.`
+              : `${label} saved.`,
           newerEdits ? "dirty" : "saved",
         );
         updateExecutionConfigurationControls();

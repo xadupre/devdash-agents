@@ -5644,6 +5644,72 @@ test("a saved remote machine gets a one-click Copilot worker and explained place
   assert.equal(workerName.value, "Keep this edit");
 });
 
+test("adding a Copilot worker preserves an existing unsaved worker draft", async (t) => {
+  const { dom, document, posted } = await setup(t);
+  const local = {
+    id: "local",
+    name: "Local",
+    command: "",
+    repositoriesPath: "/projects",
+    modelsPath: "/models",
+    workerPath: "worker",
+    cliPath: "copilot",
+  };
+  const remote = { ...local, id: "gpu", name: "GPU", command: "ssh gpu" };
+  settingsSender(dom)({
+    execution: { machines: [local, remote], workers: [] },
+  });
+
+  const input = <T extends HTMLElement>(id: string): T =>
+    document.querySelector<T>(`#${id}`)!;
+  const workerId = input<HTMLInputElement>("worker-id");
+  const workerName = input<HTMLInputElement>("worker-name");
+  const workerMachine = input<HTMLSelectElement>("worker-machine");
+  const workerKind = input<HTMLSelectElement>("worker-kind");
+  const workerSource = input<HTMLInputElement>("worker-source");
+  workerId.value = "draft-worker";
+  workerId.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  workerName.value = "Unsaved draft";
+  workerName.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  workerMachine.value = "gpu";
+  workerMachine.dispatchEvent(
+    new dom.window.Event("change", { bubbles: true }),
+  );
+  workerKind.value = "model-id";
+  workerKind.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  workerSource.value = "Qwen/Qwen3-0.6B";
+  workerSource.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+
+  const machineEntry = input<HTMLSelectElement>("machine-entry");
+  machineEntry.value = "gpu";
+  machineEntry.dispatchEvent(new dom.window.Event("change"));
+  input<HTMLButtonElement>("add-machine-copilot-worker").click();
+  const saved = posted.at(-1)!;
+  if (saved.type !== "execution-configuration") assert.fail();
+  assert.equal(saved.configuration.workers[0]!.id, "copilot-gpu");
+
+  acknowledgeExecutionSave(dom, saved);
+  assert.equal(input<HTMLSelectElement>("worker-entry").value, "");
+  assert.equal(workerId.value, "draft-worker");
+  assert.equal(workerId.readOnly, false);
+  assert.equal(workerName.value, "Unsaved draft");
+  assert.equal(workerMachine.value, "gpu");
+  assert.equal(workerKind.value, "model-id");
+  assert.equal(workerSource.value, "Qwen/Qwen3-0.6B");
+  assert.match(
+    input<HTMLElement>("execution-configuration-status").textContent!,
+    /existing worker draft remains unsaved/,
+  );
+
+  input<HTMLFormElement>("worker-configuration").requestSubmit();
+  const draftSave = posted.at(-1)!;
+  if (draftSave.type !== "execution-configuration") assert.fail();
+  assert.deepEqual(
+    draftSave.configuration.workers.map((worker) => worker.id),
+    ["copilot-gpu", "draft-worker"],
+  );
+});
+
 test("the worker table lists running workers and stops idle ones on demand", async (t) => {
   const { dom, document, posted } = await setup(t);
   const send = (models: object[]): void => {
