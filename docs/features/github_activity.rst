@@ -93,12 +93,12 @@ list but may not have a corresponding GitHub page.
 CI status
 ---------
 
-**CI** shows each workflow's latest default-branch run and a rolling 24-hour
-failure ratio across branches. The ratio counts completed successes and
-failures, including timed-out and startup-failed runs; pending, cancelled,
-skipped, neutral and approval-required runs are excluded. Empty or incomplete
-samples and API errors are shown as unavailable. Use **Refresh** to fetch the
-selected repository's current status.
+**CI** shows each workflow's latest default-branch run, excluding pull-request
+runs, and a rolling 24-hour failure ratio across branches. The ratio counts
+completed successes and failures, including timed-out and startup-failed runs;
+pending, cancelled, skipped, neutral and approval-required runs are excluded.
+Empty or incomplete samples and API errors are shown as unavailable. Use
+**Refresh** to fetch the selected repository's current status.
 
 Fetching and ordering
 ---------------------

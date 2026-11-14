@@ -308,17 +308,12 @@ GitHub Actions
 * **Nightly coverage**: TypeScript coverage artifacts and Codecov uploads.
   Configure Codecov with the ``CODECOV_TOKEN`` repository secret.
 * **Weekly documentation**: strict Sphinx builds and HTML artifacts; also runs
-  for documentation PRs and pushes to ``main``. Successful default-branch builds
-  deploy to GitHub Pages; PR builds never deploy. Select **GitHub Actions** as the
-  Pages source in the repository settings. Scheduled and manual failures open an
-  issue. CI status for the selected repository is available in the application's
-  **Github > CI** activity view.
+  for documentation PRs. Scheduled and manual failures open an issue.
 * **Release**: runs the same native package matrix for ``v*`` tags or published
   GitHub releases and attaches all five platform/variant VSIX assets.
 
 Actions are pinned to commits. Only release publication has write access to
 repository contents, and only the documentation-failure job can create issues.
-Only the documentation deployment job can write Pages and request an OIDC token.
 No workflow runs the authenticated Copilot smoke test.
 
 For a release, first update ``package.json`` and ``package-lock.json`` to the

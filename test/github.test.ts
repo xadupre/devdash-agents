@@ -124,6 +124,9 @@ function workflowRun(
     status,
     conclusion,
     created_at: createdAt,
+    event: "push",
+    head_branch: "main",
+    head_repository: { full_name: "acme/project" },
     html_url: `https://github.com/acme/project/actions/runs/${id}`,
   };
 }
@@ -158,7 +161,9 @@ function ciFixture(respond: (path: string, url: URL) => unknown): {
       const [key, ...value] = args[index + 1]!.split("=");
       url.searchParams.set(key!, value.join("="));
     }
-    return JSON.stringify(respond(path, url));
+    const response = await respond(path, url);
+    signal.throwIfAborted();
+    return JSON.stringify(response);
   };
   return { run, calls };
 }
@@ -176,7 +181,12 @@ test("CI activity loads the selected repository's latest runs and complete 24-ho
     }
     if (url.searchParams.has("branch")) {
       assert.equal(url.searchParams.get("branch"), "trunk");
-      return { workflow_runs: [workflowRun(34, "failure")] };
+      return {
+        total_count: 1,
+        workflow_runs: [
+          { ...workflowRun(34, "failure"), head_branch: "trunk" },
+        ],
+      };
     }
     const created = url.searchParams.get("created");
     assert.match(created ?? "", /^.+\.\..+$/);
@@ -237,7 +247,7 @@ test("CI activity rejects duplicate runs shifted across pagination boundaries", 
       };
     }
     if (url.searchParams.has("branch")) {
-      return { workflow_runs: [] };
+      return { total_count: 0, workflow_runs: [] };
     }
     const page = url.searchParams.get("page");
     return {
@@ -255,6 +265,172 @@ test("CI activity rejects duplicate runs shifted across pagination boundaries", 
     source.run,
   ).loadCi(new AbortController().signal);
   assert.match(result.workflows[0]?.ratioError ?? "", /Duplicate runs/);
+});
+
+test("CI latest status skips fork and pull-request runs across pages but includes them in the ratio", async () => {
+  const pull = (id: number) => ({
+    ...workflowRun(id, "failure"),
+    event: "pull_request",
+    head_repository: { full_name: "fork/project" },
+  });
+  const source = ciFixture((_path, url) => {
+    if (url.pathname === "/repos/acme/project")
+      return { default_branch: "main" };
+    if (url.pathname.endsWith("/actions/workflows"))
+      return { total_count: 1, workflows: [{ id: 12, name: "Build" }] };
+    if (url.searchParams.has("created")) {
+      return {
+        total_count: 2,
+        workflow_runs: [pull(1), workflowRun(2, "success")],
+      };
+    }
+    if (url.searchParams.get("per_page") === "1")
+      return { total_count: 103, workflow_runs: [pull(1)] };
+    if (url.searchParams.get("page") === "1")
+      return {
+        total_count: 103,
+        workflow_runs: Array.from({ length: 100 }, (_, index) =>
+          pull(index + 1),
+        ),
+      };
+    return {
+      total_count: 103,
+      workflow_runs: [
+        { ...pull(101), event: "pull_request_target" },
+        {
+          ...workflowRun(102, "failure"),
+          head_repository: { full_name: "fork/project" },
+        },
+        { ...workflowRun(103, "success"), event: "workflow_dispatch" },
+      ],
+    };
+  });
+  const result = await new GitHubRepository(
+    "/projects/project",
+    source.run,
+  ).loadCi(new AbortController().signal);
+  assert.equal(result.workflows[0]?.latest?.id, 103);
+  assert.deepEqual(result.workflows[0]?.ratio, { failed: 1, total: 2 });
+  assert.ok(
+    source.calls.some(
+      (args) => args.includes("page=2") && args.includes("per_page=100"),
+    ),
+  );
+});
+
+test("CI reports an unavailable latest status when all matching runs cannot be inspected", async () => {
+  const source = ciFixture((_path, url) => {
+    if (url.pathname === "/repos/acme/project")
+      return { default_branch: "main" };
+    if (url.pathname.endsWith("/actions/workflows"))
+      return { total_count: 1, workflows: [{ id: 12, name: "Build" }] };
+    if (url.searchParams.has("created"))
+      return { total_count: 0, workflow_runs: [] };
+    const page = Number(url.searchParams.get("page"));
+    const count = Number(url.searchParams.get("per_page"));
+    return {
+      total_count: 1001,
+      workflow_runs: Array.from({ length: count }, (_, index) => ({
+        ...workflowRun((page - 1) * count + index + 1, "failure"),
+        event: "pull_request",
+      })),
+    };
+  });
+  const result = await new GitHubRepository(
+    "/projects/project",
+    source.run,
+  ).loadCi(new AbortController().signal);
+  assert.equal(result.workflows[0]?.latest, undefined);
+  assert.match(result.workflows[0]?.latestError ?? "", /Too many runs/);
+});
+
+test("CI distinguishes pull-request-only histories from missing run identities", async () => {
+  for (const [run, expectedError] of [
+    [{ ...workflowRun(1, "failure"), event: "pull_request" }, false],
+    [{ ...workflowRun(1, "failure"), head_repository: null }, true],
+  ] as const) {
+    const source = ciFixture((_path, url) => {
+      if (url.pathname === "/repos/acme/project")
+        return { default_branch: "main" };
+      if (url.pathname.endsWith("/actions/workflows"))
+        return { total_count: 1, workflows: [{ id: 12, name: "Build" }] };
+      if (url.searchParams.has("created"))
+        return { total_count: 0, workflow_runs: [] };
+      return { total_count: 1, workflow_runs: [run] };
+    });
+    const result = await new GitHubRepository(
+      "/projects/project",
+      source.run,
+    ).loadCi(new AbortController().signal);
+    assert.equal(result.workflows[0]?.latest, undefined);
+    assert.equal(Boolean(result.workflows[0]?.latestError), expectedError);
+  }
+});
+
+test("CI limits concurrent requests across workflows", async () => {
+  let active = 0;
+  let maximum = 0;
+  const source = ciFixture(async (_path, url) => {
+    if (url.pathname === "/repos/acme/project")
+      return { default_branch: "main" };
+    if (url.pathname.endsWith("/actions/workflows"))
+      return {
+        total_count: 100,
+        workflows: Array.from({ length: 100 }, (_, index) => ({
+          id: index + 1,
+          name: `Workflow ${index + 1}`,
+        })),
+      };
+    active++;
+    maximum = Math.max(maximum, active);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    active--;
+    return { total_count: 1, workflow_runs: [workflowRun(1, "success")] };
+  });
+  const result = await new GitHubRepository(
+    "/projects/project",
+    source.run,
+  ).loadCi(new AbortController().signal);
+  assert.equal(result.workflows.length, 100);
+  assert.equal(maximum, 8);
+  assert.equal(
+    source.calls.filter((args) => args[5]?.endsWith("/runs")).length,
+    200,
+  );
+  assert.ok(result.workflows.every((workflow) => workflow.latest?.id === 1));
+});
+
+test("cancelling CI loading does not start later workflow batches", async () => {
+  const controller = new AbortController();
+  let release!: () => void;
+  let started!: () => void;
+  const blocked = new Promise<void>((resolve) => (release = resolve));
+  const firstBatch = new Promise<void>((resolve) => (started = resolve));
+  let requests = 0;
+  const source = ciFixture(async (_path, url) => {
+    if (url.pathname === "/repos/acme/project")
+      return { default_branch: "main" };
+    if (url.pathname.endsWith("/actions/workflows"))
+      return {
+        total_count: 8,
+        workflows: Array.from({ length: 8 }, (_, index) => ({
+          id: index + 1,
+          name: `Workflow ${index + 1}`,
+        })),
+      };
+    if (++requests === 8) started();
+    await blocked;
+    return { total_count: 0, workflow_runs: [] };
+  });
+  const loading = new GitHubRepository("/projects/project", source.run).loadCi(
+    controller.signal,
+  );
+  const rejected = assert.rejects(loading, { name: "AbortError" });
+  await firstBatch;
+  controller.abort();
+  release();
+  await rejected;
+  assert.equal(requests, 8);
 });
 
 test("issue and PR comments use one explicit POST with a private JSON payload and the exact literal Unicode body", async () => {

@@ -735,18 +735,62 @@ export class GitHubRepository {
     const latestRun = async (
       id: number,
     ): Promise<GitHubWorkflowRun | undefined> => {
-      const data = await api(
-        `repos/${owner}/${name}/actions/workflows/${id}/runs`,
-        {
+      const path = `repos/${owner}/${name}/actions/workflows/${id}/runs`;
+      const eligible = (value: unknown): boolean => {
+        const run = record(value);
+        const event = text(run.event);
+        if (event === "pull_request" || event === "pull_request_target")
+          return false;
+        return (
+          text(run.head_branch) === defaultBranch &&
+          text(record(run.head_repository).full_name).toLowerCase() ===
+            nameWithOwner.toLowerCase()
+        );
+      };
+      const readPage = async (page: number, perPage: number) => {
+        const data = await api(path, {
           branch: defaultBranch,
-          per_page: "1",
-        },
-      );
-      if (!Array.isArray(data.workflow_runs)) {
-        throw new Error("Invalid GitHub response: expected workflow runs.");
+          page: String(page),
+          per_page: String(perPage),
+        });
+        if (
+          typeof data.total_count !== "number" ||
+          !Number.isSafeInteger(data.total_count) ||
+          data.total_count < 0 ||
+          !Array.isArray(data.workflow_runs) ||
+          data.workflow_runs.length > perPage
+        ) {
+          throw new Error("Invalid GitHub response: expected workflow runs.");
+        }
+        return { total: data.total_count, runs: data.workflow_runs };
+      };
+      const first = await readPage(1, 1);
+      if (!first.runs.length) {
+        if (first.total !== 0) throw new Error("Incomplete latest runs.");
+        return undefined;
       }
-      if (!data.workflow_runs.length) return undefined;
-      return workflowRun(data.workflow_runs[0]);
+      if (first.total === 0) throw new Error("Incomplete latest runs.");
+      if (eligible(first.runs[0])) return workflowRun(first.runs[0]);
+
+      const seen = new Set<number>();
+      let total: number | undefined;
+      for (let page = 1; page <= 10; page++) {
+        const result = await readPage(page, 100);
+        if (total === undefined) total = result.total;
+        if (result.total !== total || seen.size + result.runs.length > total)
+          throw new Error("Incomplete latest runs.");
+        for (const value of result.runs) {
+          const run = workflowRun(value);
+          if (seen.has(run.id)) throw new Error("Duplicate latest runs.");
+          seen.add(run.id);
+          if (eligible(value)) return run;
+        }
+        if (seen.size === total) return undefined;
+        if (result.runs.length !== 100) {
+          throw new Error("Incomplete latest runs.");
+        }
+      }
+      throw new Error("Too many runs to find the latest default-branch run.");
     };
     const dailyRatio = async (
       id: number,
@@ -811,35 +855,42 @@ export class GitHubRepository {
     const now = new Date();
     const since = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
     const until = now.toISOString();
-    const health = await Promise.all(
-      workflows.map(async (workflow) => {
-        const [latestResult, ratioResult] = await Promise.allSettled([
-          latestRun(workflow.id),
-          dailyRatio(workflow.id, since, until),
-        ]);
-        return {
-          ...workflow,
-          ...(latestResult.status === "fulfilled"
-            ? latestResult.value
-              ? { latest: latestResult.value }
-              : {}
-            : {
-                latestError:
-                  latestResult.reason instanceof Error
-                    ? latestResult.reason.message
-                    : String(latestResult.reason),
-              }),
-          ...(ratioResult.status === "fulfilled"
-            ? { ratio: ratioResult.value }
-            : {
-                ratioError:
-                  ratioResult.reason instanceof Error
-                    ? ratioResult.reason.message
-                    : String(ratioResult.reason),
-              }),
-        };
-      }),
-    );
+    const health: GitHubWorkflowHealth[] = [];
+    for (let offset = 0; offset < workflows.length; offset += 4) {
+      signal.throwIfAborted();
+      health.push(
+        ...(await Promise.all(
+          workflows.slice(offset, offset + 4).map(async (workflow) => {
+            const [latestResult, ratioResult] = await Promise.allSettled([
+              latestRun(workflow.id),
+              dailyRatio(workflow.id, since, until),
+            ]);
+            return {
+              ...workflow,
+              ...(latestResult.status === "fulfilled"
+                ? latestResult.value
+                  ? { latest: latestResult.value }
+                  : {}
+                : {
+                    latestError:
+                      latestResult.reason instanceof Error
+                        ? latestResult.reason.message
+                        : String(latestResult.reason),
+                  }),
+              ...(ratioResult.status === "fulfilled"
+                ? { ratio: ratioResult.value }
+                : {
+                    ratioError:
+                      ratioResult.reason instanceof Error
+                        ? ratioResult.reason.message
+                        : String(ratioResult.reason),
+                  }),
+            };
+          }),
+        )),
+      );
+    }
+    signal.throwIfAborted();
     return {
       repository: nameWithOwner,
       defaultBranch,
