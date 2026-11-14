@@ -45,6 +45,8 @@ export type ContextReductionMode = "sliding" | "compress";
 export interface LocalContextReduction {
   messages: LocalChatMessage[];
   cacheTokens: number;
+  /** Tokenized replacement history, including chat-template overhead. Absent on older workers. */
+  contextTokens?: number;
 }
 
 /** Token counts reported when a generation completes. */
@@ -55,6 +57,8 @@ export interface LocalGeneration {
   generatedTokens: number;
   /** Tokens held by the session's KV cache afterwards. */
   cacheTokens: number;
+  /** Logical prompt plus generated tokens, independent of KV retention. Absent on older workers. */
+  contextTokens?: number;
 }
 
 interface Pending {
@@ -395,6 +399,9 @@ export class LocalWorker {
       cachedTokens: response.cachedTokens as number,
       generatedTokens: response.generatedTokens as number,
       cacheTokens: response.cacheTokens as number,
+      ...(response.contextTokens !== undefined
+        ? { contextTokens: response.contextTokens as number }
+        : {}),
     };
   }
 
@@ -414,6 +421,9 @@ export class LocalWorker {
     return {
       messages: response.messages as LocalChatMessage[],
       cacheTokens: response.cacheTokens as number,
+      ...(response.contextTokens !== undefined
+        ? { contextTokens: response.contextTokens as number }
+        : {}),
     };
   }
 
@@ -538,6 +548,13 @@ export class LocalWorker {
           throw new Error("Invalid local worker event.");
         }
         const response = event as Record<string, unknown>;
+        if (
+          (response.type === "done" || response.type === "reduced") &&
+          response.contextTokens !== undefined &&
+          (!Number.isSafeInteger(response.contextTokens) ||
+            Number(response.contextTokens) < 0)
+        )
+          throw new Error("Invalid local worker context token count.");
         if (
           response.type === "reduced" &&
           (!Number.isSafeInteger(response.cacheTokens) ||

@@ -325,6 +325,7 @@ class FakeBackend : public Backend {
       ++result.generatedTokens;
     }
     result.cacheTokens = cache.size() + result.generatedTokens;
+    result.contextTokens = result.cacheTokens;
     return result;
   }
   Generation generateChat(const std::string& session, const Json& messages, int maxLength,
@@ -351,7 +352,7 @@ class FakeBackend : public Backend {
             "Reduction arguments must reach the backend unchanged");
     while (state_->holdGeneration && !cancelled) std::this_thread::sleep_for(1ms);
     if (cancelled) throw Error("cancelled", "Reduction cancelled");
-    return {messages, 7};
+    return {messages, 7, 11};
   }
 
  private:
@@ -471,6 +472,7 @@ void sessionCache() {
   require(first["cachedTokens"] == 0, "A new session starts with an empty cache");
   require(first["generatedTokens"] == 2 && first["cacheTokens"] == 8,
           "Completion must report generated and cached sequence tokens");
+  require(first["contextTokens"] == 8, "Completion must report logical context tokens");
   messages.push_back({{"role", "assistant"}, {"content", "hi"}});
   messages.push_back({{"role", "user"}, {"content", "again"}});
   require(chat("second", messages)["cachedTokens"] == 6, "A follow-up turn must reuse the session cache");
@@ -527,6 +529,7 @@ void reductionProtocol() {
   const auto result = h.wait("reduce", "reduced");
   require(result["messages"] == messages && result["cacheTokens"] == 7,
           "Reduction must return authoritative replacement history and cache count");
+  require(result["contextTokens"] == 11, "Reduction must report logical context separately from cache");
   require(h.state->rawGenerations == 0 && h.state->chatGenerations == 0,
           "Reduction must not request or stream a normal reply");
   h.state->holdGeneration = true;

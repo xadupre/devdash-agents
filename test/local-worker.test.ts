@@ -26,7 +26,10 @@ function worker(mode = "", timeout = 5000): LocalWorker {
   );
 }
 
-function reductionWorker(mode = "normal"): LocalWorker {
+function reductionWorker(
+  mode = "normal",
+  contextTokens?: unknown,
+): LocalWorker {
   return new LocalWorker(process.execPath, [
     "-e",
     `
@@ -39,6 +42,9 @@ function reductionWorker(mode = "normal"): LocalWorker {
         else if (r.method === "cancel") {
           send({id:r.id,type:"cancelled"});
           send({id:active.id,type:"error",code:"cancelled",message:"reduction cancelled"});
+        } else if (r.method === "generate") {
+          send({id:r.id,type:"done",cancelled:false,cachedTokens:3,generatedTokens:5,
+            cacheTokens:0,contextTokens:${JSON.stringify(contextTokens)}});
         } else if (r.method === "reduceContext") {
           active = r;
           if (${JSON.stringify(mode)} === "wait") return;
@@ -49,7 +55,8 @@ function reductionWorker(mode = "normal"): LocalWorker {
           const messages = ${JSON.stringify(mode)} === "invalid" ? [{role:"tool",content:"bad"}] :
             ${JSON.stringify(mode)} === "too-many" ? Array.from({length:256}, () => ({role:"user",content:"x"})) :
             [{role:"user",content:JSON.stringify(r)}];
-          send({id:r.id,type:"reduced",messages,cacheTokens:17});
+          send({id:r.id,type:"reduced",messages,cacheTokens:17,
+            contextTokens:${JSON.stringify(contextTokens)}});
         }
       });
     `,
@@ -77,6 +84,41 @@ test("reduces context with isolated session options and returns replacement hist
     assert.equal(request.session, "repo");
     assert.equal(request.maxLength, 1024);
     assert.equal(result.cacheTokens, 17);
+  }
+});
+
+test("preserves logical context counts independently of private cache counts", async (t) => {
+  const client = reductionWorker("normal", 40);
+  t.after(() => client.stop());
+  assert.deepEqual(await client.generateChat([], () => {}), {
+    cachedTokens: 3,
+    generatedTokens: 5,
+    cacheTokens: 0,
+    contextTokens: 40,
+  });
+  const reduced = await client.reduceContext([], "sliding");
+  assert.equal(reduced.contextTokens, 40);
+  assert.equal(reduced.cacheTokens, 17);
+});
+
+test("rejects malformed logical context counts in generation and reduction responses", async (t) => {
+  for (const contextTokens of [
+    -1,
+    1.5,
+    "40",
+    null,
+    Number.MAX_SAFE_INTEGER + 1,
+  ]) {
+    for (const method of ["generate", "reduce"] as const) {
+      const client = reductionWorker("normal", contextTokens);
+      t.after(() => client.stop());
+      await assert.rejects(
+        method === "generate"
+          ? client.generateChat([], () => {})
+          : client.reduceContext([], "sliding"),
+        /Invalid local worker context token count/,
+      );
+    }
   }
 });
 

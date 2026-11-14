@@ -133,3 +133,47 @@ test("failed and cancelled reductions preserve history and release the busy guar
   ]);
   await conversation.dispose();
 });
+
+test("Engine usage and reductions report logical context without a private KV cache", async () => {
+  for (const mode of ["sliding", "compress"] as const) {
+    const usage: number[] = [];
+    const conversation = new LocalConversation(
+      {
+        load: async () => ({ provider: "cpu", deviceId: 0, name: "CPU" }),
+        generateChat: async (messages, onToken) => {
+          if (usage.length > 1)
+            assert.equal(messages[0]!.content, "reduced history");
+          onToken("answer");
+          return {
+            cachedTokens: 7,
+            generatedTokens: 5,
+            cacheTokens: 0,
+            contextTokens: 40,
+          };
+        },
+        reduceContext: async () => ({
+          messages: [{ role: "user", content: "reduced history" }],
+          cacheTokens: 0,
+          contextTokens: 15,
+        }),
+        stop: async () => {},
+      },
+      "/model",
+    );
+    const signal = new AbortController().signal;
+    await conversation.start(signal, (event) => {
+      if (event.type === "session.usage_info") {
+        usage.push(event.data.currentTokens);
+        assert.equal(event.data.tokenLimit, event.data.currentTokens);
+      }
+    });
+    assert.equal(conversation.canReduceContext, false);
+    await conversation.send("original history", signal);
+    assert.equal(conversation.canReduceContext, true);
+    await conversation.reduceContext(mode, signal);
+    assert.equal(conversation.canReduceContext, true);
+    await conversation.send("follow up", signal);
+    assert.deepEqual(usage, [40, 15, 40]);
+    await conversation.dispose();
+  }
+});

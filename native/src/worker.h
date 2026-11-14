@@ -47,10 +47,12 @@ struct Generation {
   std::size_t cachedTokens = 0;     // Prompt tokens served from the session's KV cache.
   std::size_t generatedTokens = 0;  // Tokens produced by this request.
   std::size_t cacheTokens = 0;      // Tokens held by the session's KV cache afterwards.
+  std::size_t contextTokens = 0;    // Logical prompt plus generated tokens, independent of KV retention.
 };
 struct ContextReduction {
   Json messages;
   std::size_t cacheTokens = 0;
+  std::size_t contextTokens = 0;  // Tokenized replacement history, including chat-template overhead.
 };
 // Drops whole exchanges or trims their oldest content at UTF-8 boundaries.
 // The counter includes the model's template and all system messages.

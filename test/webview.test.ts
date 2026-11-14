@@ -811,6 +811,7 @@ test("the Sessions panel shows per-session usage, the current device, session li
   state.repositories[0]!.view = "local";
   state.repositories[0]!.localSession = {
     status: "ready",
+    canReduceContext: true,
     generatedTokens: 5,
     contextTokens: 20,
     contextLimit: 4096,
@@ -878,6 +879,7 @@ test("the Sessions panel shows per-session usage, the current device, session li
     models.models[0]!.sessions[0]!.cacheTokens = blocked === "empty" ? 0 : 10;
     state.repositories[0]!.localSession!.contextTokens =
       blocked === "empty" ? 0 : 20;
+    state.repositories[0]!.localSession!.canReduceContext = blocked !== "empty";
     state.repositories[0]!.localSession!.status =
       blocked === "session" ? "busy" : "ready";
     state.repositories[0]!.managementBusy = blocked === "management";
@@ -908,6 +910,29 @@ test("the Sessions panel shows per-session usage, the current device, session li
       )!.disabled,
       false,
       "retained context remains reducible after its cache is released",
+    );
+  for (const contextTokens of [0, undefined]) {
+    state.repositories[0]!.localSession!.contextTokens = contextTokens;
+    publish(state);
+    for (const mode of ["sliding", "compress"])
+      assert.equal(
+        view.querySelector<HTMLButtonElement>(
+          `[data-control-key="${mode}:alpha"]`,
+        )!.disabled,
+        false,
+        "retained history is reducible even without a context-token count",
+      );
+  }
+  state.repositories[0]!.localSession!.contextTokens = 20;
+  state.repositories[0]!.localSession!.canReduceContext = false;
+  publish(state);
+  for (const mode of ["sliding", "compress"])
+    assert.equal(
+      view.querySelector<HTMLButtonElement>(
+        `[data-control-key="${mode}:alpha"]`,
+      )!.disabled,
+      true,
+      "token counts alone do not imply reducible history",
     );
   state.repositories[0]!.localSession!.status = "error";
   for (const canReduceContext of [false, true]) {
@@ -2102,6 +2127,7 @@ test("local session selection and model controls retain independent session and 
     {
       id: "first",
       status: "ready",
+      canReduceContext: true,
       model: "model GPU 0",
       readOnly: false,
       generatedTokens: 1,
@@ -2111,6 +2137,7 @@ test("local session selection and model controls retain independent session and 
     {
       id: "second",
       status: "ready",
+      canReduceContext: true,
       model: "model GPU 1",
       readOnly: true,
       generatedTokens: 2,

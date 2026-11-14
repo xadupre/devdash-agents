@@ -21,6 +21,9 @@ def engine_checks(send, receive, directory):
             if event["type"] == "done":
                 assert event["generatedTokens"] > 0, event
                 assert event["cacheTokens"] == 0, "Closed Engine requests retain no private session cache"
+                assert event["generatedTokens"] < event["contextTokens"] <= kwargs.get("maxLength", 64), event
+                if "prompt" in kwargs:
+                    assert event["contextTokens"] == len(kwargs["prompt"]) + event["generatedTokens"], event
                 assert chunks, event
                 return event
             chunks.append(event["text"])
@@ -56,15 +59,19 @@ def engine_checks(send, receive, directory):
         {"role": "user", "content": "C" * 10},
         {"role": "assistant", "content": "A" * 10},
     ]
+    original = generate("engine-history", messages=history, maxLength=512)
+    original_tokens = original["contextTokens"] - original["generatedTokens"]
     for mode in ("sliding", "compress"):
         identifier = f"engine-reduce-{mode}"
         send({"id": identifier, "method": "reduceContext", "mode": mode,
               "session": "engine-chat", "messages": history, "maxLength": 512})
         reduced = receive(identifier, "reduced", timeout=30)
         assert reduced["cacheTokens"] == 0, reduced
+        assert 0 < reduced["contextTokens"] <= original_tokens // 2, (original, reduced)
         assert reduced["messages"][0] == history[0], reduced
-        generate(f"engine-follow-up-{mode}", maxLength=512,
-                 messages=reduced["messages"] + [{"role": "user", "content": "B"}])
+        follow_up = generate(f"engine-follow-up-{mode}", maxLength=512,
+                             messages=reduced["messages"] + [{"role": "user", "content": "B"}])
+        assert follow_up["contextTokens"] > reduced["contextTokens"], (follow_up, reduced)
 
 
 def main():

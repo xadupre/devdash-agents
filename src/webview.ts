@@ -2195,7 +2195,7 @@ declare function acquireVsCodeApi(): {
           reduce.disabled =
             unavailable ||
             model.status !== "ready" ||
-            !local?.contextTokens ||
+            !local?.canReduceContext ||
             (local?.status !== "ready" &&
               !(local?.status === "error" && local.canReduceContext)) ||
             Boolean(repository?.managementBusy);
