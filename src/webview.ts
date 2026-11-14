@@ -3074,7 +3074,13 @@ declare function acquireVsCodeApi(): {
           if (!diffContext) return;
           diffNavigation = undefined;
           diffContext.path = file.path;
-          renderDiffTree();
+          for (const entry of diffTree.querySelectorAll<HTMLButtonElement>(
+            "button[data-path]",
+          ))
+            entry.setAttribute(
+              "aria-current",
+              String(entry.dataset.path === file.path),
+            );
           requestDiff(file.path);
         });
         parent.append(button);
