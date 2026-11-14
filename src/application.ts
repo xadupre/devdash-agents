@@ -27,9 +27,11 @@ import {
   type PostMortemSource,
 } from "./postmortem";
 import {
+  collectSessionDiff,
   findDiscussionReferences,
   type SessionExportSource,
 } from "./session-export";
+import { datasetMetrics } from "./dataset";
 import {
   isLocalProvider,
   type ContextReductionMode,
@@ -101,6 +103,7 @@ export type InformationType =
 export interface ChatMessage {
   role: "user" | "assistant" | "system" | "reasoning" | "tool" | "output";
   content: string;
+  recordId?: string;
   title?: string;
   timestamp?: string;
   agentId?: string;
@@ -117,6 +120,12 @@ export interface DatasetSession {
   backend: "local" | "copilot";
   location: "current" | "archived" | "parallel";
   models: string[];
+  worker?: string;
+  promptCount: number;
+  toolCallCount: number;
+  durationMs?: number;
+  date?: string;
+  finalDiffSize?: number;
   references: string[];
   annotation?: SessionAnnotation;
 }
@@ -209,7 +218,11 @@ interface RepositorySession {
   assignment?: SessionAssignment;
   backend?: "local" | "copilot";
   recordId: string;
+  recordMessageStart?: number;
+  parentRecordId?: string;
+  activeSendId?: string;
   models?: string[];
+  finalDiffSize?: number;
   annotation?: SessionAnnotation;
   context?: string;
   repository: Repository;
@@ -891,6 +904,7 @@ export class AgentApplication {
     {
       request: PendingPermission;
       owner: RepositorySession;
+      requestId?: string;
       resolve: (approve: boolean) => void;
     }
   >();
@@ -899,6 +913,7 @@ export class AgentApplication {
     {
       request: PendingQuestion;
       owner: RepositorySession;
+      requestId?: string;
       resolve: (response: UserInputResponse) => void;
       reject: (error: Error) => void;
     }
@@ -914,6 +929,7 @@ export class AgentApplication {
     ) => Conversation,
     private readonly onChange: (streaming?: boolean) => void,
     saved?: SavedApplication,
+    private readonly collectDiff: typeof collectSessionDiff = collectSessionDiff,
   ) {
     if (saved && saved.root !== root) {
       throw new Error(
@@ -982,10 +998,12 @@ export class AgentApplication {
         const main: RepositorySession = {
           repository,
           recordId: copilotSaved?.recordId ?? randomUUID(),
+          recordMessageStart: copilotSaved?.recordMessageStart,
           assignment:
             copilotSaved?.assignment &&
             structuredClone(copilotSaved.assignment),
           models: copilotSaved?.models?.slice(),
+          finalDiffSize: copilotSaved?.finalDiffSize,
           annotation: copilotSaved?.annotation,
           context: copilotSaved?.context,
           status: copilotSaved?.sessionId ? "saved" : "idle",
@@ -1013,9 +1031,11 @@ export class AgentApplication {
             localId: randomUUID(),
             repository,
             recordId: localSaved.recordId ?? randomUUID(),
+            recordMessageStart: localSaved.recordMessageStart,
             assignment:
               localSaved.assignment && structuredClone(localSaved.assignment),
             models: localSaved.models?.slice(),
+            finalDiffSize: localSaved.finalDiffSize,
             annotation: localSaved.annotation,
             context: localSaved.context,
             status: "idle",
@@ -1211,7 +1231,12 @@ export class AgentApplication {
       repositoryId,
     };
     return new Promise((resolve) => {
-      this.permissions.set(request.id, { request, owner: session, resolve });
+      this.permissions.set(request.id, {
+        request,
+        owner: session,
+        requestId: session.activeSendId ?? requestId,
+        resolve,
+      });
       this.onChange();
     });
   }
@@ -1253,6 +1278,7 @@ export class AgentApplication {
     const message: ChatMessage = {
       role: "assistant",
       content: question.question,
+      ...(session.parentRecordId ? { recordId: session.parentRecordId } : {}),
       ...(requestId ? { title: `Parallel ${requestId.slice(0, 8)}` } : {}),
     };
     session.messages.push(message);
@@ -1262,6 +1288,7 @@ export class AgentApplication {
       this.questions.set(request.id, {
         request,
         owner: session,
+        requestId: session.activeSendId ?? requestId,
         resolve,
         reject,
       });
@@ -1288,6 +1315,9 @@ export class AgentApplication {
     const message: ChatMessage = {
       role: "user",
       content: answer,
+      ...(pending.owner.parentRecordId
+        ? { recordId: pending.owner.parentRecordId }
+        : {}),
     };
     const transcriptOwner = pending.owner.parent ?? pending.owner;
     transcriptOwner.messages.push(message);
@@ -1434,7 +1464,7 @@ export class AgentApplication {
         sessionId: conversation.sessionId,
         backend: conversation.backend ?? "copilot",
         location,
-        models: conversation.models?.slice() ?? [],
+        ...datasetMetrics(conversation),
         references: findDiscussionReferences(conversation),
         ...(conversation.annotation
           ? { annotation: { ...conversation.annotation } }
@@ -1567,6 +1597,7 @@ export class AgentApplication {
       session.backend = backend;
       if (assignment) this.setAssignment(session, assignment);
       session.messages = messages;
+      session.recordMessageStart = messages.length;
       session.messages.push({
         role: "system",
         content: `Starting a new ${localFactory ? "local chat" : "Copilot"} session. Earlier messages are kept for reference, not replayed as context.`,
@@ -1874,6 +1905,9 @@ export class AgentApplication {
         sessionId: previous.sessionId,
       });
       session.recordId = randomUUID();
+      session.recordMessageStart = session.messages.length;
+      session.activeSendId = undefined;
+      session.finalDiffSize = undefined;
       session.models = undefined;
       session.annotation = undefined;
       session.context = undefined;
@@ -2027,6 +2061,8 @@ export class AgentApplication {
     queuedMessage?: ChatMessage,
     images = queuedMessage?.images,
   ): Promise<void> {
+    const requestId = randomUUID();
+    const recordId = session.recordId;
     const conversation = session.conversation;
     if (!conversation) throw new Error("The repository session is not open.");
     this.recordModel(session, conversation.model);
@@ -2039,6 +2075,9 @@ export class AgentApplication {
         ...(images?.length ? { images } : {}),
       });
     const user = queuedMessage ?? session.messages.at(-1)!;
+    user.timestamp ??= new Date().toISOString();
+    session.finalDiffSize = undefined;
+    session.activeSendId = requestId;
     user.timings = [];
     session.timing = new ExecutionTiming(user.timings);
     session.draft = "";
@@ -2080,7 +2119,8 @@ export class AgentApplication {
       } finally {
         session.timing?.finish();
         session.timing = undefined;
-        this.clearPendingRequests(id, session);
+        await this.captureFinalDiffSize(session, requestId, recordId);
+        this.clearPendingRequests(id, session, requestId);
         this.onChange();
       }
     };
@@ -2089,10 +2129,13 @@ export class AgentApplication {
     try {
       await sending;
     } finally {
-      session.sending = undefined;
-      if (session.status === "busy") session.status = "ready";
-      this.drainQueue(session);
-      this.onChange();
+      if (session.sending === sending) session.sending = undefined;
+      if (session.activeSendId === requestId) {
+        session.activeSendId = undefined;
+        if (session.status === "busy") session.status = "ready";
+        this.drainQueue(session);
+        this.onChange();
+      }
     }
   }
 
@@ -2102,6 +2145,7 @@ export class AgentApplication {
     images?: ImageAttachment[],
   ): Promise<void> {
     const requestId = randomUUID();
+    const parentRecordId = parent.recordId;
     const parentConversation = parent.conversation;
     const label = `Parallel ${requestId.slice(0, 8)}`;
     let remaining = MAX_SELECTION_LENGTH;
@@ -2124,6 +2168,8 @@ export class AgentApplication {
     const prompt = buildPrompt(question, selection);
     const user: ChatMessage = {
       role: "user",
+      recordId: parentRecordId,
+      timestamp: new Date().toISOString(),
       title: label,
       content: question.trim(),
       ...(images?.length ? { images } : {}),
@@ -2132,6 +2178,7 @@ export class AgentApplication {
     const child: RepositorySession = {
       repository: parent.repository,
       recordId: randomUUID(),
+      parentRecordId,
       parent,
       assignment: parent.assignment && structuredClone(parent.assignment),
       context: selection,
@@ -2170,7 +2217,14 @@ export class AgentApplication {
                     (entry) =>
                       entry.sessionId === parentConversation?.sessionId,
                   ) ?? child);
-            this.recordEvent(child, event, parent.messages, label, tokenOwner);
+            this.recordEvent(
+              child,
+              event,
+              parent.messages,
+              label,
+              tokenOwner,
+              parentRecordId,
+            );
           }
         });
         child.sessionId = conversation.sessionId;
@@ -2194,6 +2248,7 @@ export class AgentApplication {
         ) {
           const message: ChatMessage = {
             role: "assistant",
+            recordId: parentRecordId,
             title: label,
             content: answer,
           };
@@ -2204,6 +2259,7 @@ export class AgentApplication {
         if (error instanceof CopilotRecoveryError) this.interruptWork(child);
         const message: ChatMessage = {
           role: "assistant",
+          recordId: parentRecordId,
           title: `${label} - failed`,
           error: true,
           content: error instanceof Error ? error.message : String(error),
@@ -2214,6 +2270,7 @@ export class AgentApplication {
       } finally {
         child.timing?.finish();
         child.timing = undefined;
+        await this.captureFinalDiffSize(child);
         this.clearPendingRequests(parent.repository.id, child);
         try {
           await child.conversation?.dispose();
@@ -2614,6 +2671,8 @@ export class AgentApplication {
         saved.assignment && structuredClone(saved.assignment);
     session.recordId = saved?.recordId ?? randomUUID();
     session.models = saved?.models?.slice();
+    session.finalDiffSize = saved?.finalDiffSize;
+    session.recordMessageStart = saved?.recordMessageStart;
     session.annotation = saved?.annotation
       ? { ...saved.annotation }
       : undefined;
@@ -2672,6 +2731,30 @@ export class AgentApplication {
     if (!models.includes(model)) models.push(model);
   }
 
+  private async captureFinalDiffSize(
+    session: RepositorySession,
+    requestId?: string,
+    recordId = session.recordId,
+  ): Promise<void> {
+    try {
+      const { diff } = await this.collectDiff(
+        { repository: session.repository, conversation: session },
+        AbortSignal.timeout(10_000),
+      );
+      if (session.recordId === recordId && session.activeSendId === requestId)
+        session.finalDiffSize = Buffer.byteLength(diff, "utf8");
+      else if (session.recordId !== recordId) {
+        const archived = session.history.find(
+          (entry) => entry.recordId === recordId,
+        );
+        if (archived) archived.finalDiffSize = Buffer.byteLength(diff, "utf8");
+      }
+    } catch {
+      if (session.recordId === recordId && session.activeSendId === requestId)
+        session.finalDiffSize = undefined;
+    }
+  }
+
   private copyMessage(message: ChatMessage): ChatMessage {
     return {
       ...message,
@@ -2688,11 +2771,17 @@ export class AgentApplication {
         : {}),
       ...(session.backend !== undefined ? { backend: session.backend } : {}),
       ...(session.recordId !== undefined ? { recordId: session.recordId } : {}),
+      ...(session.recordMessageStart !== undefined
+        ? { recordMessageStart: session.recordMessageStart }
+        : {}),
       sessionId: session.sessionId,
       ...(session.models?.length ? { models: [...session.models] } : {}),
       ...(session.context !== undefined ? { context: session.context } : {}),
       ...(session.annotation ? { annotation: { ...session.annotation } } : {}),
       generatedTokens: session.generatedTokens,
+      ...(session.finalDiffSize !== undefined
+        ? { finalDiffSize: session.finalDiffSize }
+        : {}),
       draft: session.draft,
       messages: session.messages.map((message) => this.copyMessage(message)),
       ...(session.postMortem
@@ -2795,11 +2884,13 @@ export class AgentApplication {
   private clearPendingRequests(
     repositoryId?: string,
     owner?: RepositorySession,
+    requestId?: string,
   ): void {
     for (const [id, pending] of this.permissions) {
       if (
         (!repositoryId || pending.request.repositoryId === repositoryId) &&
-        (!owner || pending.owner === owner)
+        (!owner || pending.owner === owner) &&
+        (requestId === undefined || pending.requestId === requestId)
       ) {
         this.permissions.delete(id);
         pending.resolve(false);
@@ -2808,7 +2899,8 @@ export class AgentApplication {
     for (const [id, pending] of this.questions) {
       if (
         (!repositoryId || pending.request.repositoryId === repositoryId) &&
-        (!owner || pending.owner === owner)
+        (!owner || pending.owner === owner) &&
+        (requestId === undefined || pending.requestId === requestId)
       ) {
         this.questions.delete(id);
         pending.reject(
@@ -2930,6 +3022,7 @@ export class AgentApplication {
     destination?: ChatMessage[],
     label?: string,
     tokenOwner: Pick<SavedConversation, "generatedTokens"> = session,
+    recordId?: string,
   ): void {
     session.timing?.record(event);
     if (event.type === "session.info" && event.data.infoType === "local")
@@ -2979,6 +3072,7 @@ export class AgentApplication {
     const push = (message: ChatMessage): void => {
       if (label)
         message.title = message.title ? `${label}: ${message.title}` : label;
+      if (recordId) message.recordId = recordId;
       session.messages.push(message);
       destination?.push(message);
     };

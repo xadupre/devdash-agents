@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { runCommand, type CommandRunner } from "../src/github";
 import {
+  collectSessionDiff,
   exportSessionJson,
   findDiscussionReferences,
   type SessionExportSource,
@@ -48,6 +49,34 @@ async function setup(t: TestContext) {
   };
   return { cwd, signal, git, commit, branch, source };
 }
+
+test("diff collection waits for all Git probes before reporting a failure", async (t) => {
+  const { signal, source } = await setup(t);
+  let releaseBranch!: () => void;
+  let branchStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    branchStarted = resolve;
+  });
+  const run: CommandRunner = async (_file, args) => {
+    if (args[0] === "rev-parse") throw new Error("Missing commit");
+    if (args[0] === "branch") {
+      branchStarted();
+      await new Promise<void>((resolve) => {
+        releaseBranch = resolve;
+      });
+    }
+    return "";
+  };
+  let completed = false;
+  const collecting = collectSessionDiff(source, signal, run).finally(() => {
+    completed = true;
+  });
+  await started;
+  assert.equal(completed, false);
+  releaseBranch();
+  await assert.rejects(collecting, /Missing commit/);
+  assert.equal(completed, true);
+});
 
 test("session export starts with the commit, preserves all records and ends with the tracked working-tree diff", async (t) => {
   const { cwd, signal, git, commit, source } = await setup(t);

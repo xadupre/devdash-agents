@@ -46,11 +46,13 @@ export interface SavedConversation {
   assignment?: SessionAssignment;
   backend?: "local" | "copilot";
   recordId?: string;
+  recordMessageStart?: number;
   sessionId?: string;
   models?: string[];
   annotation?: SessionAnnotation;
   context?: string;
   generatedTokens?: number;
+  finalDiffSize?: number;
   draft: string;
   messages: ChatMessage[];
   postMortem?: PostMortem;
@@ -90,6 +92,10 @@ function isMessage(value: unknown): value is ChatMessage {
       value.role,
     ) &&
     typeof value.content === "string" &&
+    (value.recordId === undefined ||
+      (typeof value.recordId === "string" &&
+        value.recordId.length > 0 &&
+        value.recordId.length <= 100)) &&
     (value.timings === undefined ||
       (Array.isArray(value.timings) && value.timings.every(isStepTiming))) &&
     (value.error === undefined || typeof value.error === "boolean") &&
@@ -130,6 +136,12 @@ function parseConversation(value: unknown): SavedConversation {
       (typeof value.recordId !== "string" ||
         !value.recordId ||
         value.recordId.length > 100)) ||
+    (value.recordMessageStart !== undefined &&
+      (typeof value.recordMessageStart !== "number" ||
+        !Number.isSafeInteger(value.recordMessageStart) ||
+        value.recordMessageStart < 0 ||
+        !Array.isArray(value.messages) ||
+        value.recordMessageStart > value.messages.length)) ||
     (value.models !== undefined &&
       (!Array.isArray(value.models) ||
         value.models.some(
@@ -145,6 +157,10 @@ function parseConversation(value: unknown): SavedConversation {
       (typeof value.generatedTokens !== "number" ||
         !Number.isSafeInteger(value.generatedTokens) ||
         value.generatedTokens < 0)) ||
+    (value.finalDiffSize !== undefined &&
+      (typeof value.finalDiffSize !== "number" ||
+        !Number.isSafeInteger(value.finalDiffSize) ||
+        value.finalDiffSize < 0)) ||
     !Array.isArray(value.messages) ||
     !value.messages.every(isMessage)
   ) {
@@ -169,6 +185,9 @@ function parseConversation(value: unknown): SavedConversation {
     ...(assignment ? { assignment } : {}),
     ...(value.backend !== undefined ? { backend: value.backend } : {}),
     ...(value.recordId !== undefined ? { recordId: value.recordId } : {}),
+    ...(value.recordMessageStart !== undefined
+      ? { recordMessageStart: value.recordMessageStart as number }
+      : {}),
     sessionId: value.sessionId,
     ...(value.models !== undefined ? { models: [...value.models] } : {}),
     ...(value.context !== undefined ? { context: value.context } : {}),
@@ -178,10 +197,14 @@ function parseConversation(value: unknown): SavedConversation {
     ...(value.generatedTokens !== undefined
       ? { generatedTokens: value.generatedTokens }
       : {}),
+    ...(value.finalDiffSize !== undefined
+      ? { finalDiffSize: value.finalDiffSize }
+      : {}),
     draft: value.draft,
     messages: value.messages.map((message) => ({
       role: message.role,
       content: message.content,
+      ...(message.recordId !== undefined ? { recordId: message.recordId } : {}),
       title: message.title,
       timestamp: message.timestamp,
       agentId: message.agentId,

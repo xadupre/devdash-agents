@@ -94,6 +94,24 @@ test("tool call identifiers persist and are validated", async (t) => {
   assert.throws(() => storage.save(snapshot), /Invalid conversation/);
 });
 
+test("record message ownership and boundaries persist and are validated", async (t) => {
+  const { directory, snapshot } = await setup(t);
+  const storage = new ApplicationStorage(directory, snapshot.root);
+  snapshot.sessions[0]!.recordMessageStart = 1;
+  snapshot.sessions[0]!.messages[0]!.recordId = "archived-record";
+  await storage.save(snapshot);
+  const saved = (await storage.load())!.sessions[0]!;
+  assert.equal(saved.recordMessageStart, 1);
+  assert.equal(saved.messages[0]!.recordId, "archived-record");
+  for (const invalid of [-1, 2, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const bad = structuredClone(snapshot);
+    bad.sessions[0]!.recordMessageStart = invalid;
+    assert.throws(() => storage.save(bad), /Invalid conversation/);
+  }
+  snapshot.sessions[0]!.messages[0]!.recordId = "";
+  assert.throws(() => storage.save(snapshot), /Invalid conversation/);
+});
+
 test("step timings persist, validate bounds and freeze interrupted steps on disk", async (t) => {
   const { directory, snapshot } = await setup(t);
   const storage = new ApplicationStorage(directory, snapshot.root);
@@ -458,6 +476,7 @@ test("dataset metadata survives storage and rejects invalid annotations", async 
   const storage = new ApplicationStorage(directory, snapshot.root);
   snapshot.sessions[0]!.recordId = "record";
   snapshot.sessions[0]!.models = ["model-a", "model-b"];
+  snapshot.sessions[0]!.finalDiffSize = 0;
   snapshot.sessions[0]!.annotation = {
     mark: "abandon",
     reason: "Requirements changed",
@@ -467,6 +486,7 @@ test("dataset metadata survives storage and rejects invalid annotations", async 
   const loaded = await storage.load();
   assert.equal(loaded?.sessions[0]?.recordId, "record");
   assert.deepEqual(loaded?.sessions[0]?.models, ["model-a", "model-b"]);
+  assert.equal(loaded?.sessions[0]?.finalDiffSize, 0);
   assert.deepEqual(
     loaded?.sessions[0]?.annotation,
     snapshot.sessions[0]!.annotation,
@@ -485,6 +505,16 @@ test("dataset metadata survives storage and rejects invalid annotations", async 
       }),
     );
     await assert.rejects(storage.load(), /mark|reason/i);
+  }
+  for (const finalDiffSize of [-1, 0.5, "12", Number.MAX_SAFE_INTEGER + 1]) {
+    await writeFile(
+      storage.filename,
+      JSON.stringify({
+        ...snapshot,
+        sessions: [{ ...snapshot.sessions[0], finalDiffSize }],
+      }),
+    );
+    await assert.rejects(storage.load(), /Invalid conversation/);
   }
 });
 

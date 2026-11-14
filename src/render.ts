@@ -326,7 +326,7 @@ export function renderApplication(resources: {
       <p id="dataset-error" role="alert" hidden></p>
       <div class="dataset-table-container">
         <table id="dataset-table">
-          <thead><tr>${["Repository", "Session", "Models", "Issue / PR references", "Annotation"].map((label) => `<th scope="col" aria-sort="none"><button type="button">${label}</button></th>`).join("")}<th scope="col">Actions</th></tr></thead>
+          <thead><tr>${["Repository", "Session", "Models", "Issue / PR references", "Annotation", "Worker", "Prompts", "Tool calls", "Duration", "Date", "Final diff size (bytes)"].map((label) => `<th scope="col" aria-sort="none"><button type="button">${label}</button></th>`).join("")}<th scope="col">Actions</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>

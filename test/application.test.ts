@@ -15,6 +15,8 @@ import { LocalWorker, type LocalChatMessage } from "../src/local-worker";
 import { ApplicationStorage, type SavedApplication } from "../src/storage";
 import { testImage, waitForRequest } from "./helpers";
 import { describePermission } from "../src/presentation";
+import { runCommand } from "../src/github";
+import { collectSessionDiff } from "../src/session-export";
 import {
   generatePostMortem,
   type PostMortemProgress,
@@ -1415,6 +1417,7 @@ async function setup(
   t: TestContext,
   scenario = "conversation",
   timeoutMs = 5_000,
+  collectDiff?: typeof collectSessionDiff,
 ) {
   const root = await mkdtemp(join(tmpdir(), "devdash-agents-application-"));
   for (const name of ["alpha", "beta"]) {
@@ -1454,6 +1457,7 @@ async function setup(
         updates.emit("change");
       },
       saved,
+      collectDiff,
     );
     applications.push(application);
     return application;
@@ -1582,6 +1586,13 @@ test("generated tokens accumulate across calls, subagents and parallel work, per
   assert.equal(tokens(restored), 0);
   await restored.send(alpha, "Fresh request");
   assert.equal(tokens(restored), 37);
+  assert.equal(
+    restored
+      .getDatasetSessions()
+      .find((session) => session.location === "current")?.promptCount,
+    1,
+  );
+  assert.ok(restored.getSnapshot().sessions[0]!.recordMessageStart! > 0);
   await restored.newSession(alpha);
   assert.equal(tokens(restored), 0);
   await restored.deleteSessions(alpha, false);
@@ -1594,8 +1605,26 @@ test("late parallel usage belongs to its archived conversation after a failed ma
     "permission-error",
   );
   const alpha = join(root, "alpha");
+  const signal = AbortSignal.timeout(10_000);
+  const git = (args: string[]) => runCommand("git", args, alpha, signal);
+  await git(["init", "--quiet"]);
+  await git(["add", "."]);
+  await git([
+    "-c",
+    "user.name=Example",
+    "-c",
+    "user.email=example@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--quiet",
+    "-m",
+    "initial",
+  ]);
   await application.openSession(alpha);
-  const originalId = application.getSnapshot().sessions[0]!.sessionId;
+  const original = application.getSnapshot().sessions[0]!;
+  const originalId = original.sessionId;
+  const originalRecordId = original.recordId;
   const mainRejected = assert.rejects(
     application.send(alpha, "Fail after approval"),
     /Main request failed/,
@@ -1607,10 +1636,49 @@ test("late parallel usage belongs to its archived conversation after a failed ma
   assert.equal(application.getState().repositories[0]?.generatedTokens, 20);
   application.respondToPermission(permission.id, true);
   await mainRejected;
+  const archivedDiffSize = application
+    .getDatasetSessions()
+    .find((session) => session.location === "current")?.finalDiffSize;
+  assert.ok(archivedDiffSize !== undefined && archivedDiffSize > 0);
   await writeFile(join(alpha, "scenario"), "persist-usage");
   await application.openSession(alpha);
+  assert.equal(
+    application
+      .getDatasetSessions()
+      .find((session) => session.location === "current")?.finalDiffSize,
+    undefined,
+  );
+  assert.equal(
+    application
+      .getDatasetSessions()
+      .find((session) => session.recordId === originalRecordId)?.finalDiffSize,
+    archivedDiffSize,
+  );
   assert.equal(application.getState().repositories[0]?.generatedTokens, 0);
+  assert.equal(
+    application
+      .getDatasetSessions()
+      .find((session) => session.location === "current")?.promptCount,
+    0,
+  );
+  assert.ok(
+    application
+      .getState()
+      .messages.some((message) => message.content === "Fail after approval"),
+  );
   application.answerQuestion(question.id, "Targeted");
+  assert.equal(
+    application
+      .getState()
+      .messages.find((message) => message.content === "Targeted")?.recordId,
+    originalRecordId,
+  );
+  assert.equal(
+    application
+      .getDatasetSessions()
+      .find((session) => session.location === "current")?.promptCount,
+    0,
+  );
   await parallel;
   assert.equal(application.getState().repositories[0]?.generatedTokens, 0);
   assert.equal(
@@ -1620,6 +1688,136 @@ test("late parallel usage belongs to its archived conversation after a failed ma
       ?.generatedTokens,
     27,
   );
+  assert.equal(
+    application
+      .getState()
+      .messages.find((message) => message.toolCallId === "late-parallel-tool")
+      ?.recordId,
+    originalRecordId,
+  );
+  assert.equal(
+    application
+      .getDatasetSessions()
+      .find((session) => session.location === "current")?.toolCallCount,
+    0,
+  );
+  assert.equal(
+    application
+      .getDatasetSessions()
+      .find(
+        (session) =>
+          session.location === "archived" && session.toolCallCount === 1,
+      )?.toolCallCount,
+    1,
+  );
+});
+
+test("a completed diff probe updates its archived record without changing a replacement request", async (t) => {
+  let releaseProbe!: () => void;
+  let reportProbe!: () => void;
+  const probeReleased = new Promise<void>(
+    (resolve) => (releaseProbe = resolve),
+  );
+  const probeCompleted = new Promise<void>(
+    (resolve) => (reportProbe = resolve),
+  );
+  let first = true;
+  const collectDiff: typeof collectSessionDiff = async (...args) => {
+    const result = await collectSessionDiff(...args);
+    if (first) {
+      first = false;
+      reportProbe();
+      await probeReleased;
+    }
+    return result;
+  };
+  const { application, root, createApplication, waitForPermission } =
+    await setup(t, "permission-error", 5_000, collectDiff);
+  const alpha = join(root, "alpha");
+  const signal = AbortSignal.timeout(10_000);
+  const git = (args: string[]) => runCommand("git", args, alpha, signal);
+  await git(["init", "--quiet"]);
+  await writeFile(join(alpha, "tracked.txt"), "before\n");
+  await git(["add", "."]);
+  await git([
+    "-c",
+    "user.name=Example",
+    "-c",
+    "user.email=example@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--quiet",
+    "-m",
+    "initial",
+  ]);
+  await application.openSession(alpha);
+  const originalRecordId = application.getSnapshot().sessions[0]!.recordId;
+  await writeFile(join(alpha, "tracked.txt"), "old diff é\n");
+  const failed = assert.rejects(
+    application.send(alpha, "Fail after approval"),
+    /Main request failed/,
+  );
+  application.respondToPermission((await waitForPermission(alpha)).id, true);
+  try {
+    await probeCompleted;
+    const expectedSize = Buffer.byteLength(
+      await git([
+        "-c",
+        "core.fsmonitor=false",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--binary",
+        "HEAD",
+        "--",
+      ]),
+      "utf8",
+    );
+    await writeFile(join(alpha, "scenario"), "permission");
+    await application.openSession(alpha);
+    await writeFile(join(alpha, "tracked.txt"), "replacement diff\n");
+    const replacement = application.send(alpha, "Replacement request");
+    const permission = await waitForPermission(alpha);
+    releaseProbe();
+    await failed;
+    assert.equal(
+      application
+        .getDatasetSessions()
+        .find((entry) => entry.recordId === originalRecordId)?.finalDiffSize,
+      expectedSize,
+    );
+    const current = application
+      .getDatasetSessions()
+      .find((entry) => entry.location === "current")!;
+    assert.notEqual(current.recordId, originalRecordId);
+    assert.equal(current.finalDiffSize, undefined);
+    assert.equal(application.getState().repositories[0]?.status, "busy");
+    assert.ok(
+      application
+        .getState()
+        .permissions.some((entry) => entry.id === permission.id),
+    );
+    application.respondToPermission(permission.id, true);
+    await replacement;
+    const restored = createApplication(application.getSnapshot());
+    await restored.refresh();
+    assert.equal(
+      restored
+        .getDatasetSessions()
+        .find((entry) => entry.recordId === originalRecordId)?.finalDiffSize,
+      expectedSize,
+    );
+    assert.notEqual(
+      restored
+        .getDatasetSessions()
+        .find((entry) => entry.location === "current")?.finalDiffSize,
+      expectedSize,
+    );
+  } finally {
+    releaseProbe();
+  }
 });
 
 test("saving the local view retains an in-flight Copilot parallel session", async (t) => {
@@ -1821,6 +2019,15 @@ test("dataset annotations and used models follow sessions through archiving and 
   await application.openSession(alpha);
   await application.send(alpha, "Implement #84", false);
   const first = application.getDatasetSessions()[0]!;
+  assert.equal(first.promptCount, 1);
+  assert.equal(
+    first.toolCallCount,
+    application.getState().messages.filter((message) => message.role === "tool")
+      .length,
+  );
+  assert.ok(first.durationMs! >= 0);
+  assert.ok(Number.isFinite(Date.parse(first.date!)));
+  assert.equal(first.finalDiffSize, undefined);
   assert.deepEqual(first.references, ["#84"]);
   assert.ok(first.models.includes("fixture"));
   assert.throws(
@@ -1853,6 +2060,10 @@ test("dataset annotations and used models follow sessions through archiving and 
   assert.deepEqual(after.annotation, archived.annotation);
   assert.deepEqual(after.models, archived.models);
   assert.deepEqual(after.references, ["#84"]);
+  assert.equal(after.promptCount, first.promptCount);
+  assert.equal(after.toolCallCount, first.toolCallCount);
+  assert.equal(after.durationMs, first.durationMs);
+  assert.equal(after.date, first.date);
   restored.annotateSession(alpha, first.recordId, { mark: "success" });
   assert.equal(
     restored.getDatasetSessionExport(alpha, first.recordId).conversation
@@ -1871,6 +2082,93 @@ test("dataset annotations and used models follow sessions through archiving and 
   assert.equal(
     withoutAnnotation.getDatasetSessionExport(alpha, first.recordId)
       .conversation.annotation,
+    undefined,
+  );
+});
+
+test("dataset final diff bytes survive cancellation, archiving and restoration", async (t) => {
+  const { application, root, createApplication, waitForPermission } =
+    await setup(t, "permission");
+  const alpha = join(root, "alpha");
+  const signal = AbortSignal.timeout(10_000);
+  const git = (args: string[]) => runCommand("git", args, alpha, signal);
+  await git(["init", "--quiet"]);
+  await writeFile(join(alpha, "tracked.txt"), "before\n");
+  await git(["add", "."]);
+  await git([
+    "-c",
+    "user.name=Example",
+    "-c",
+    "user.email=example@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--quiet",
+    "-m",
+    "initial",
+  ]);
+  await application.openSession(alpha);
+  await writeFile(join(alpha, "tracked.txt"), "after é\n");
+  const sending = application.send(alpha, "First request");
+  application.respondToPermission((await waitForPermission(alpha)).id, true);
+  await sending;
+  const first = application.getDatasetSessions()[0]!;
+  const diff = await git([
+    "-c",
+    "core.fsmonitor=false",
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--binary",
+    "HEAD",
+    "--",
+  ]);
+  assert.equal(first.finalDiffSize, Buffer.byteLength(diff, "utf8"));
+  assert.ok(first.finalDiffSize! > 0);
+  await writeFile(join(alpha, "tracked.txt"), "before\n");
+  const second = application.send(alpha, "Second request");
+  application.respondToPermission((await waitForPermission(alpha)).id, true);
+  await second;
+  assert.equal(application.getDatasetSessions()[0]!.finalDiffSize, 0);
+  await writeFile(join(alpha, "tracked.txt"), "after é\n");
+  const cancelled = assert.rejects(
+    application.send(alpha, "Cancelled request"),
+    /cancel|abort/i,
+  );
+  await waitForPermission(alpha);
+  const queued = assert.rejects(
+    application.send(alpha, "Never sent", false),
+    /cancel|abort/i,
+  );
+  application.cancel(alpha);
+  await Promise.all([cancelled, queued]);
+  assert.equal(
+    application.getDatasetSessions()[0]!.finalDiffSize,
+    first.finalDiffSize,
+  );
+  await application.newSession(alpha);
+  const archived = application
+    .getDatasetSessions()
+    .find((row) => row.recordId === first.recordId)!;
+  assert.equal(archived.finalDiffSize, first.finalDiffSize);
+  assert.equal(archived.promptCount, 3);
+  const restored = createApplication(application.getSnapshot());
+  await restored.refresh();
+  assert.equal(
+    restored
+      .getDatasetSessions()
+      .find((row) => row.recordId === first.recordId)!.finalDiffSize,
+    first.finalDiffSize,
+  );
+  assert.equal(
+    restored.getDatasetSessionExport(alpha, first.recordId).conversation
+      .finalDiffSize,
+    first.finalDiffSize,
+  );
+  assert.equal(
+    application.getDatasetSessions().find((row) => row.location === "current")
+      ?.finalDiffSize,
     undefined,
   );
 });
@@ -3094,14 +3392,50 @@ test("closing during a request saves an interruption notice and never restarts p
     "persist-hang",
   );
   const alpha = join(root, "alpha");
+  const signal = AbortSignal.timeout(10_000);
+  const git = (args: string[]) => runCommand("git", args, alpha, signal);
+  await git(["init", "--quiet"]);
+  await writeFile(join(alpha, "tracked.txt"), "before\n");
+  await git(["add", "."]);
+  await git([
+    "-c",
+    "user.name=Example",
+    "-c",
+    "user.email=example@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--quiet",
+    "-m",
+    "initial",
+  ]);
   await application.openSession(alpha);
+  await writeFile(join(alpha, "tracked.txt"), "after shutdown\n");
   const running = application.send(alpha, "An interrupted question");
   const rejected = assert.rejects(running, { name: "AbortError" });
   await waitForRequest(alpha, "session.sendAndWait");
   await application.dispose();
   await rejected;
   const saved = application.getSnapshot();
-  assert.ok(saved.sessions.find((session) => session.id === alpha)?.sessionId);
+  const savedSession = saved.sessions.find((session) => session.id === alpha);
+  assert.ok(savedSession?.sessionId);
+  assert.equal(
+    savedSession?.finalDiffSize,
+    Buffer.byteLength(
+      await git([
+        "-c",
+        "core.fsmonitor=false",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--binary",
+        "HEAD",
+        "--",
+      ]),
+      "utf8",
+    ),
+  );
   assert.ok(
     saved.sessions
       .find((session) => session.id === alpha)

@@ -290,23 +290,33 @@ async function loadDiscussions(
   return { discussions, unresolved };
 }
 
-export async function exportSessionJson(
+export async function collectSessionDiff(
   source: SessionExportSource,
   signal: AbortSignal,
   run?: CommandRunner,
-  onWarning?: (message: string) => void,
-): Promise<string> {
+) {
   signal.throwIfAborted();
   const machine = source.conversation.assignment?.executionMachine;
   const cwd = machine
     ? machineRepositoryPath(machine, source.repository.path)
     : source.repository.path;
   run ??= machine?.command ? remoteCommandRunner(machine) : runCommand;
-  const [commitOutput, branchOutput, remotes] = await Promise.all([
+  const commandResults = (await Promise.allSettled([
     run("git", ["rev-parse", "--verify", "HEAD^{commit}"], cwd, signal),
     run("git", ["branch", "--show-current"], cwd, signal),
     run("git", ["remote"], cwd, signal),
-  ]);
+  ])) as [
+    PromiseSettledResult<string>,
+    PromiseSettledResult<string>,
+    PromiseSettledResult<string>,
+  ];
+  const output = (result: PromiseSettledResult<string>) => {
+    if (result.status === "rejected") throw result.reason;
+    return result.value;
+  };
+  const commitOutput = output(commandResults[0]);
+  const branchOutput = output(commandResults[1]);
+  const remotes = output(commandResults[2]);
   const commit = commitOutput.trim();
   const branch = branchOutput.trim();
   if (!hashPattern.test(commit)) {
@@ -386,6 +396,25 @@ export async function exportSessionJson(
     );
   }
   signal.throwIfAborted();
+  return { commit, diff, pullRequest, remotes };
+}
+
+export async function exportSessionJson(
+  source: SessionExportSource,
+  signal: AbortSignal,
+  run?: CommandRunner,
+  onWarning?: (message: string) => void,
+): Promise<string> {
+  const machine = source.conversation.assignment?.executionMachine;
+  const cwd = machine
+    ? machineRepositoryPath(machine, source.repository.path)
+    : source.repository.path;
+  run ??= machine?.command ? remoteCommandRunner(machine) : runCommand;
+  const { commit, diff, pullRequest, remotes } = await collectSessionDiff(
+    source,
+    signal,
+    run,
+  );
   const references = [
     ...findDiscussionMentions(source.conversation),
     ...(pullRequest?.closingIssues ?? []),
