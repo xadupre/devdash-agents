@@ -136,7 +136,7 @@ export class LocalResponse {
   }
 
   finish(truncated = false): boolean {
-    if (truncated) {
+    if (truncated && !this.toolComplete) {
       if (
         this.toolClose ||
         this.phase === "think" ||
