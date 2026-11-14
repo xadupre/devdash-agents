@@ -92,6 +92,10 @@ function isMessage(value: unknown): value is ChatMessage {
       value.role,
     ) &&
     typeof value.content === "string" &&
+    (value.recordId === undefined ||
+      (typeof value.recordId === "string" &&
+        value.recordId.length > 0 &&
+        value.recordId.length <= 100)) &&
     (value.timings === undefined ||
       (Array.isArray(value.timings) && value.timings.every(isStepTiming))) &&
     (value.error === undefined || typeof value.error === "boolean") &&
@@ -200,6 +204,7 @@ function parseConversation(value: unknown): SavedConversation {
     messages: value.messages.map((message) => ({
       role: message.role,
       content: message.content,
+      ...(message.recordId !== undefined ? { recordId: message.recordId } : {}),
       title: message.title,
       timestamp: message.timestamp,
       agentId: message.agentId,

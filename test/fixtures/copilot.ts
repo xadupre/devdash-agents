@@ -116,6 +116,18 @@ function handle(request: Request): void {
         outputTokens: 7,
       });
     }
+    if (scenario === "question-usage") {
+      notify(pendingSessionId, "tool.execution_start", {
+        toolCallId: "late-parallel-tool",
+        toolName: "bash",
+        arguments: { command: "printf done" },
+      });
+      notify(pendingSessionId, "tool.execution_complete", {
+        toolCallId: "late-parallel-tool",
+        success: true,
+        result: { content: "done" },
+      });
+    }
     reply(pendingSend, {
       response: {
         type: "assistant.message",

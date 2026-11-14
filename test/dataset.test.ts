@@ -105,15 +105,55 @@ test("legacy request durations exclude idle gaps and combine with timed requests
   assert.equal(mixed.durationMs, 5000);
 });
 
+test("unsent placeholders do not split legacy request durations", () => {
+  const { durationMs } = datasetMetrics({
+    draft: "",
+    messages: [
+      { role: "user", content: "Sent", timestamp: "2026-11-14T09:00:00Z" },
+      {
+        role: "assistant",
+        content: "Working",
+        timestamp: "2026-11-14T09:00:02Z",
+      },
+      {
+        role: "user",
+        content: "Queued",
+        title: "Queued - after current work",
+        timestamp: "2026-11-14T09:00:05Z",
+      },
+      { role: "tool", content: "Tool", timestamp: "2026-11-14T09:00:06Z" },
+      {
+        role: "assistant",
+        content: "Finished",
+        timestamp: "2026-11-14T09:00:07Z",
+      },
+      {
+        role: "user",
+        content: "Cancelled",
+        title: "Not sent - queue cancelled",
+        timestamp: "2026-11-14T09:00:08Z",
+      },
+      {
+        role: "assistant",
+        content: "Final",
+        timestamp: "2026-11-14T09:00:09Z",
+      },
+    ],
+  });
+  assert.equal(durationMs, 9000);
+});
+
 test("dataset metrics only include messages belonging to the current record", () => {
   const metrics = datasetMetrics({
     draft: "",
+    recordId: "current",
     recordMessageStart: 2,
     messages: [
       { role: "user", content: "Reference prompt" },
       { role: "tool", content: "Reference tool" },
       { role: "user", content: "Current prompt" },
       { role: "tool", content: "Current tool" },
+      { role: "tool", content: "Late archived tool", recordId: "archived" },
     ],
   });
   assert.equal(metrics.promptCount, 1);

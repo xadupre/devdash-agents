@@ -101,6 +101,7 @@ export type InformationType =
 export interface ChatMessage {
   role: "user" | "assistant" | "system" | "reasoning" | "tool" | "output";
   content: string;
+  recordId?: string;
   title?: string;
   timestamp?: string;
   agentId?: string;
@@ -216,6 +217,8 @@ interface RepositorySession {
   backend?: "local" | "copilot";
   recordId: string;
   recordMessageStart?: number;
+  parentRecordId?: string;
+  activeSendId?: string;
   models?: string[];
   finalDiffSize?: number;
   annotation?: SessionAnnotation;
@@ -827,6 +830,7 @@ export class AgentApplication {
     {
       request: PendingPermission;
       owner: RepositorySession;
+      requestId?: string;
       resolve: (approve: boolean) => void;
     }
   >();
@@ -835,6 +839,7 @@ export class AgentApplication {
     {
       request: PendingQuestion;
       owner: RepositorySession;
+      requestId?: string;
       resolve: (response: UserInputResponse) => void;
       reject: (error: Error) => void;
     }
@@ -1151,7 +1156,12 @@ export class AgentApplication {
       repositoryId,
     };
     return new Promise((resolve) => {
-      this.permissions.set(request.id, { request, owner: session, resolve });
+      this.permissions.set(request.id, {
+        request,
+        owner: session,
+        requestId: session.activeSendId ?? requestId,
+        resolve,
+      });
       this.onChange();
     });
   }
@@ -1193,6 +1203,7 @@ export class AgentApplication {
     const message: ChatMessage = {
       role: "assistant",
       content: question.question,
+      ...(session.parentRecordId ? { recordId: session.parentRecordId } : {}),
       ...(requestId ? { title: `Parallel ${requestId.slice(0, 8)}` } : {}),
     };
     session.messages.push(message);
@@ -1202,6 +1213,7 @@ export class AgentApplication {
       this.questions.set(request.id, {
         request,
         owner: session,
+        requestId: session.activeSendId ?? requestId,
         resolve,
         reject,
       });
@@ -1816,6 +1828,8 @@ export class AgentApplication {
       });
       session.recordId = randomUUID();
       session.recordMessageStart = session.messages.length;
+      session.activeSendId = undefined;
+      session.finalDiffSize = undefined;
       session.models = undefined;
       session.annotation = undefined;
       session.context = undefined;
@@ -1969,6 +1983,7 @@ export class AgentApplication {
     queuedMessage?: ChatMessage,
     images = queuedMessage?.images,
   ): Promise<void> {
+    const requestId = randomUUID();
     const conversation = session.conversation;
     if (!conversation) throw new Error("The repository session is not open.");
     this.recordModel(session, conversation.model);
@@ -1983,6 +1998,7 @@ export class AgentApplication {
     const user = queuedMessage ?? session.messages.at(-1)!;
     user.timestamp ??= new Date().toISOString();
     session.finalDiffSize = undefined;
+    session.activeSendId = requestId;
     user.timings = [];
     session.timing = new ExecutionTiming(user.timings);
     session.draft = "";
@@ -2024,8 +2040,8 @@ export class AgentApplication {
       } finally {
         session.timing?.finish();
         session.timing = undefined;
-        await this.captureFinalDiffSize(session);
-        this.clearPendingRequests(id, session);
+        await this.captureFinalDiffSize(session, requestId);
+        this.clearPendingRequests(id, session, requestId);
         this.onChange();
       }
     };
@@ -2034,10 +2050,13 @@ export class AgentApplication {
     try {
       await sending;
     } finally {
-      session.sending = undefined;
-      if (session.status === "busy") session.status = "ready";
-      this.drainQueue(session);
-      this.onChange();
+      if (session.sending === sending) session.sending = undefined;
+      if (session.activeSendId === requestId) {
+        session.activeSendId = undefined;
+        if (session.status === "busy") session.status = "ready";
+        this.drainQueue(session);
+        this.onChange();
+      }
     }
   }
 
@@ -2047,6 +2066,7 @@ export class AgentApplication {
     images?: ImageAttachment[],
   ): Promise<void> {
     const requestId = randomUUID();
+    const parentRecordId = parent.recordId;
     const parentConversation = parent.conversation;
     const label = `Parallel ${requestId.slice(0, 8)}`;
     let remaining = MAX_SELECTION_LENGTH;
@@ -2069,6 +2089,7 @@ export class AgentApplication {
     const prompt = buildPrompt(question, selection);
     const user: ChatMessage = {
       role: "user",
+      recordId: parentRecordId,
       timestamp: new Date().toISOString(),
       title: label,
       content: question.trim(),
@@ -2078,6 +2099,7 @@ export class AgentApplication {
     const child: RepositorySession = {
       repository: parent.repository,
       recordId: randomUUID(),
+      parentRecordId,
       parent,
       assignment: parent.assignment && structuredClone(parent.assignment),
       context: selection,
@@ -2116,7 +2138,14 @@ export class AgentApplication {
                     (entry) =>
                       entry.sessionId === parentConversation?.sessionId,
                   ) ?? child);
-            this.recordEvent(child, event, parent.messages, label, tokenOwner);
+            this.recordEvent(
+              child,
+              event,
+              parent.messages,
+              label,
+              tokenOwner,
+              parentRecordId,
+            );
           }
         });
         child.sessionId = conversation.sessionId;
@@ -2140,6 +2169,7 @@ export class AgentApplication {
         ) {
           const message: ChatMessage = {
             role: "assistant",
+            recordId: parentRecordId,
             title: label,
             content: answer,
           };
@@ -2150,6 +2180,7 @@ export class AgentApplication {
         if (error instanceof CopilotRecoveryError) this.interruptWork(child);
         const message: ChatMessage = {
           role: "assistant",
+          recordId: parentRecordId,
           title: `${label} - failed`,
           error: true,
           content: error instanceof Error ? error.message : String(error),
@@ -2623,15 +2654,19 @@ export class AgentApplication {
 
   private async captureFinalDiffSize(
     session: RepositorySession,
+    requestId?: string,
   ): Promise<void> {
+    const recordId = session.recordId;
     try {
       const { diff } = await collectSessionDiff(
         { repository: session.repository, conversation: session },
         AbortSignal.timeout(10_000),
       );
-      session.finalDiffSize = Buffer.byteLength(diff, "utf8");
+      if (session.recordId === recordId && session.activeSendId === requestId)
+        session.finalDiffSize = Buffer.byteLength(diff, "utf8");
     } catch {
-      session.finalDiffSize = undefined;
+      if (session.recordId === recordId && session.activeSendId === requestId)
+        session.finalDiffSize = undefined;
     }
   }
 
@@ -2764,11 +2799,13 @@ export class AgentApplication {
   private clearPendingRequests(
     repositoryId?: string,
     owner?: RepositorySession,
+    requestId?: string,
   ): void {
     for (const [id, pending] of this.permissions) {
       if (
         (!repositoryId || pending.request.repositoryId === repositoryId) &&
-        (!owner || pending.owner === owner)
+        (!owner || pending.owner === owner) &&
+        (requestId === undefined || pending.requestId === requestId)
       ) {
         this.permissions.delete(id);
         pending.resolve(false);
@@ -2777,7 +2814,8 @@ export class AgentApplication {
     for (const [id, pending] of this.questions) {
       if (
         (!repositoryId || pending.request.repositoryId === repositoryId) &&
-        (!owner || pending.owner === owner)
+        (!owner || pending.owner === owner) &&
+        (requestId === undefined || pending.requestId === requestId)
       ) {
         this.questions.delete(id);
         pending.reject(
@@ -2899,6 +2937,7 @@ export class AgentApplication {
     destination?: ChatMessage[],
     label?: string,
     tokenOwner: Pick<SavedConversation, "generatedTokens"> = session,
+    recordId?: string,
   ): void {
     session.timing?.record(event);
     if (event.type === "session.info" && event.data.infoType === "local")
@@ -2948,6 +2987,7 @@ export class AgentApplication {
     const push = (message: ChatMessage): void => {
       if (label)
         message.title = message.title ? `${label}: ${message.title}` : label;
+      if (recordId) message.recordId = recordId;
       session.messages.push(message);
       destination?.push(message);
     };

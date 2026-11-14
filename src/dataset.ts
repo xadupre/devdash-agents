@@ -1,9 +1,14 @@
 import type { SavedConversation } from "./storage";
 
 export function datasetMetrics(conversation: SavedConversation) {
-  const messages = conversation.messages.slice(
-    conversation.recordMessageStart ?? 0,
-  );
+  const messages = conversation.messages
+    .slice(conversation.recordMessageStart ?? 0)
+    .filter(
+      (message) =>
+        conversation.recordMessageStart === undefined ||
+        message.recordId === undefined ||
+        message.recordId === conversation.recordId,
+    );
   const intervals = messages
     .flatMap((message) => message.timings ?? [])
     .filter((step) => Number.isFinite(step.start))
@@ -32,13 +37,14 @@ export function datasetMetrics(conversation: SavedConversation) {
   };
   for (const message of messages) {
     if (message.role === "user") {
-      addFallbackInterval();
       if (
-        message.title !== "Queued - after current work" &&
-        !message.title?.startsWith("Not sent - ")
+        message.title === "Queued - after current work" ||
+        message.title?.startsWith("Not sent - ")
       ) {
-        request.push(message);
+        continue;
       }
+      addFallbackInterval();
+      request.push(message);
     } else if (request.length) request.push(message);
   }
   addFallbackInterval();

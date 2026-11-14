@@ -1602,8 +1602,26 @@ test("late parallel usage belongs to its archived conversation after a failed ma
     "permission-error",
   );
   const alpha = join(root, "alpha");
+  const signal = AbortSignal.timeout(10_000);
+  const git = (args: string[]) => runCommand("git", args, alpha, signal);
+  await git(["init", "--quiet"]);
+  await git(["add", "."]);
+  await git([
+    "-c",
+    "user.name=Example",
+    "-c",
+    "user.email=example@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--quiet",
+    "-m",
+    "initial",
+  ]);
   await application.openSession(alpha);
-  const originalId = application.getSnapshot().sessions[0]!.sessionId;
+  const original = application.getSnapshot().sessions[0]!;
+  const originalId = original.sessionId;
+  const originalRecordId = original.recordId;
   const mainRejected = assert.rejects(
     application.send(alpha, "Fail after approval"),
     /Main request failed/,
@@ -1615,8 +1633,24 @@ test("late parallel usage belongs to its archived conversation after a failed ma
   assert.equal(application.getState().repositories[0]?.generatedTokens, 20);
   application.respondToPermission(permission.id, true);
   await mainRejected;
+  const archivedDiffSize = application
+    .getDatasetSessions()
+    .find((session) => session.location === "current")?.finalDiffSize;
+  assert.ok(archivedDiffSize !== undefined && archivedDiffSize > 0);
   await writeFile(join(alpha, "scenario"), "persist-usage");
   await application.openSession(alpha);
+  assert.equal(
+    application
+      .getDatasetSessions()
+      .find((session) => session.location === "current")?.finalDiffSize,
+    undefined,
+  );
+  assert.equal(
+    application
+      .getDatasetSessions()
+      .find((session) => session.recordId === originalRecordId)?.finalDiffSize,
+    archivedDiffSize,
+  );
   assert.equal(application.getState().repositories[0]?.generatedTokens, 0);
   assert.equal(
     application
@@ -1638,6 +1672,28 @@ test("late parallel usage belongs to its archived conversation after a failed ma
       .sessions[0]?.history?.find((entry) => entry.sessionId === originalId)
       ?.generatedTokens,
     27,
+  );
+  assert.equal(
+    application
+      .getState()
+      .messages.find((message) => message.toolCallId === "late-parallel-tool")
+      ?.recordId,
+    originalRecordId,
+  );
+  assert.equal(
+    application
+      .getDatasetSessions()
+      .find((session) => session.location === "current")?.toolCallCount,
+    0,
+  );
+  assert.equal(
+    application
+      .getDatasetSessions()
+      .find(
+        (session) =>
+          session.location === "archived" && session.toolCallCount === 1,
+      )?.toolCallCount,
+    1,
   );
 });
 
