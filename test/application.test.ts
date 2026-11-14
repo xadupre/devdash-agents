@@ -1583,6 +1583,13 @@ test("generated tokens accumulate across calls, subagents and parallel work, per
   assert.equal(tokens(restored), 0);
   await restored.send(alpha, "Fresh request");
   assert.equal(tokens(restored), 37);
+  assert.equal(
+    restored
+      .getDatasetSessions()
+      .find((session) => session.location === "current")?.promptCount,
+    1,
+  );
+  assert.ok(restored.getSnapshot().sessions[0]!.recordMessageStart! > 0);
   await restored.newSession(alpha);
   assert.equal(tokens(restored), 0);
   await restored.deleteSessions(alpha, false);
@@ -1611,6 +1618,17 @@ test("late parallel usage belongs to its archived conversation after a failed ma
   await writeFile(join(alpha, "scenario"), "persist-usage");
   await application.openSession(alpha);
   assert.equal(application.getState().repositories[0]?.generatedTokens, 0);
+  assert.equal(
+    application
+      .getDatasetSessions()
+      .find((session) => session.location === "current")?.promptCount,
+    0,
+  );
+  assert.ok(
+    application
+      .getState()
+      .messages.some((message) => message.content === "Fail after approval"),
+  );
   application.answerQuestion(question.id, "Targeted");
   await parallel;
   assert.equal(application.getState().repositories[0]?.generatedTokens, 0);
@@ -3195,14 +3213,50 @@ test("closing during a request saves an interruption notice and never restarts p
     "persist-hang",
   );
   const alpha = join(root, "alpha");
+  const signal = AbortSignal.timeout(10_000);
+  const git = (args: string[]) => runCommand("git", args, alpha, signal);
+  await git(["init", "--quiet"]);
+  await writeFile(join(alpha, "tracked.txt"), "before\n");
+  await git(["add", "."]);
+  await git([
+    "-c",
+    "user.name=Example",
+    "-c",
+    "user.email=example@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--quiet",
+    "-m",
+    "initial",
+  ]);
   await application.openSession(alpha);
+  await writeFile(join(alpha, "tracked.txt"), "after shutdown\n");
   const running = application.send(alpha, "An interrupted question");
   const rejected = assert.rejects(running, { name: "AbortError" });
   await waitForRequest(alpha, "session.sendAndWait");
   await application.dispose();
   await rejected;
   const saved = application.getSnapshot();
-  assert.ok(saved.sessions.find((session) => session.id === alpha)?.sessionId);
+  const savedSession = saved.sessions.find((session) => session.id === alpha);
+  assert.ok(savedSession?.sessionId);
+  assert.equal(
+    savedSession?.finalDiffSize,
+    Buffer.byteLength(
+      await git([
+        "-c",
+        "core.fsmonitor=false",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--binary",
+        "HEAD",
+        "--",
+      ]),
+      "utf8",
+    ),
+  );
   assert.ok(
     saved.sessions
       .find((session) => session.id === alpha)

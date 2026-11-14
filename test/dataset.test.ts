@@ -63,6 +63,63 @@ test("legacy dataset metrics use valid timestamp spans and leave missing informa
   assert.equal(empty.finalDiffSize, undefined);
 });
 
+test("legacy request durations exclude idle gaps and combine with timed requests", () => {
+  const separated = datasetMetrics({
+    draft: "",
+    messages: [
+      { role: "user", content: "First", timestamp: "2026-11-14T09:00:00Z" },
+      {
+        role: "assistant",
+        content: "Answer",
+        timestamp: "2026-11-14T09:00:02Z",
+      },
+      { role: "user", content: "Second", timestamp: "2026-11-14T10:00:00Z" },
+      {
+        role: "assistant",
+        content: "Answer",
+        timestamp: "2026-11-14T10:00:03Z",
+      },
+    ],
+  });
+  assert.equal(separated.durationMs, 5000);
+
+  const mixed = datasetMetrics({
+    draft: "",
+    messages: [
+      { role: "user", content: "Legacy", timestamp: "2026-11-14T09:00:00Z" },
+      {
+        role: "assistant",
+        content: "Answer",
+        timestamp: "2026-11-14T09:00:02Z",
+      },
+      {
+        role: "user",
+        content: "Timed",
+        timestamp: "2026-11-14T10:00:00Z",
+        timings: [
+          { kind: "generation", name: "Model", start: 10000, end: 13000 },
+        ],
+      },
+    ],
+  });
+  assert.equal(mixed.durationMs, 5000);
+});
+
+test("dataset metrics only include messages belonging to the current record", () => {
+  const metrics = datasetMetrics({
+    draft: "",
+    recordMessageStart: 2,
+    messages: [
+      { role: "user", content: "Reference prompt" },
+      { role: "tool", content: "Reference tool" },
+      { role: "user", content: "Current prompt" },
+      { role: "tool", content: "Current tool" },
+    ],
+  });
+  assert.equal(metrics.promptCount, 1);
+  assert.equal(metrics.toolCallCount, 1);
+});
+
 test("dataset prompt counts exclude queued, cancelled and abandoned requests", () => {
   const { promptCount } = datasetMetrics({
     draft: "",

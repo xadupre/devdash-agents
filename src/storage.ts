@@ -46,6 +46,7 @@ export interface SavedConversation {
   assignment?: SessionAssignment;
   backend?: "local" | "copilot";
   recordId?: string;
+  recordMessageStart?: number;
   sessionId?: string;
   models?: string[];
   annotation?: SessionAnnotation;
@@ -131,6 +132,12 @@ function parseConversation(value: unknown): SavedConversation {
       (typeof value.recordId !== "string" ||
         !value.recordId ||
         value.recordId.length > 100)) ||
+    (value.recordMessageStart !== undefined &&
+      (typeof value.recordMessageStart !== "number" ||
+        !Number.isSafeInteger(value.recordMessageStart) ||
+        value.recordMessageStart < 0 ||
+        !Array.isArray(value.messages) ||
+        value.recordMessageStart > value.messages.length)) ||
     (value.models !== undefined &&
       (!Array.isArray(value.models) ||
         value.models.some(
@@ -174,6 +181,9 @@ function parseConversation(value: unknown): SavedConversation {
     ...(assignment ? { assignment } : {}),
     ...(value.backend !== undefined ? { backend: value.backend } : {}),
     ...(value.recordId !== undefined ? { recordId: value.recordId } : {}),
+    ...(value.recordMessageStart !== undefined
+      ? { recordMessageStart: value.recordMessageStart as number }
+      : {}),
     sessionId: value.sessionId,
     ...(value.models !== undefined ? { models: [...value.models] } : {}),
     ...(value.context !== undefined ? { context: value.context } : {}),

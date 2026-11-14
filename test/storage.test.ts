@@ -94,6 +94,19 @@ test("tool call identifiers persist and are validated", async (t) => {
   assert.throws(() => storage.save(snapshot), /Invalid conversation/);
 });
 
+test("record message boundaries persist and are validated", async (t) => {
+  const { directory, snapshot } = await setup(t);
+  const storage = new ApplicationStorage(directory, snapshot.root);
+  snapshot.sessions[0]!.recordMessageStart = 1;
+  await storage.save(snapshot);
+  assert.equal((await storage.load())!.sessions[0]!.recordMessageStart, 1);
+  for (const invalid of [-1, 2, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const bad = structuredClone(snapshot);
+    bad.sessions[0]!.recordMessageStart = invalid;
+    assert.throws(() => storage.save(bad), /Invalid conversation/);
+  }
+});
+
 test("step timings persist, validate bounds and freeze interrupted steps on disk", async (t) => {
   const { directory, snapshot } = await setup(t);
   const storage = new ApplicationStorage(directory, snapshot.root);

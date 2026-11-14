@@ -215,6 +215,7 @@ interface RepositorySession {
   assignment?: SessionAssignment;
   backend?: "local" | "copilot";
   recordId: string;
+  recordMessageStart?: number;
   models?: string[];
   finalDiffSize?: number;
   annotation?: SessionAnnotation;
@@ -917,6 +918,7 @@ export class AgentApplication {
         const main: RepositorySession = {
           repository,
           recordId: copilotSaved?.recordId ?? randomUUID(),
+          recordMessageStart: copilotSaved?.recordMessageStart,
           assignment:
             copilotSaved?.assignment &&
             structuredClone(copilotSaved.assignment),
@@ -949,6 +951,7 @@ export class AgentApplication {
             localId: randomUUID(),
             repository,
             recordId: localSaved.recordId ?? randomUUID(),
+            recordMessageStart: localSaved.recordMessageStart,
             assignment:
               localSaved.assignment && structuredClone(localSaved.assignment),
             models: localSaved.models?.slice(),
@@ -1504,6 +1507,7 @@ export class AgentApplication {
       session.backend = backend;
       if (assignment) this.setAssignment(session, assignment);
       session.messages = messages;
+      session.recordMessageStart = messages.length;
       session.messages.push({
         role: "system",
         content: `Starting a new ${localFactory ? "local chat" : "Copilot"} session. Earlier messages are kept for reference, not replayed as context.`,
@@ -1811,6 +1815,7 @@ export class AgentApplication {
         sessionId: previous.sessionId,
       });
       session.recordId = randomUUID();
+      session.recordMessageStart = session.messages.length;
       session.models = undefined;
       session.annotation = undefined;
       session.context = undefined;
@@ -2557,6 +2562,7 @@ export class AgentApplication {
     session.recordId = saved?.recordId ?? randomUUID();
     session.models = saved?.models?.slice();
     session.finalDiffSize = saved?.finalDiffSize;
+    session.recordMessageStart = saved?.recordMessageStart;
     session.annotation = saved?.annotation
       ? { ...saved.annotation }
       : undefined;
@@ -2618,7 +2624,6 @@ export class AgentApplication {
   private async captureFinalDiffSize(
     session: RepositorySession,
   ): Promise<void> {
-    if (this.closed) return;
     try {
       const { diff } = await collectSessionDiff(
         { repository: session.repository, conversation: session },
@@ -2646,6 +2651,9 @@ export class AgentApplication {
         : {}),
       ...(session.backend !== undefined ? { backend: session.backend } : {}),
       ...(session.recordId !== undefined ? { recordId: session.recordId } : {}),
+      ...(session.recordMessageStart !== undefined
+        ? { recordMessageStart: session.recordMessageStart }
+        : {}),
       sessionId: session.sessionId,
       ...(session.models?.length ? { models: [...session.models] } : {}),
       ...(session.context !== undefined ? { context: session.context } : {}),
