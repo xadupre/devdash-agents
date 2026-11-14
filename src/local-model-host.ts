@@ -86,6 +86,8 @@ export class LocalModelHost {
   private idleTimer?: ReturnType<typeof setTimeout>;
   private idleStopAt?: number;
   private idleSince?: number;
+  private disposed = false;
+  private disposing?: Promise<void>;
 
   constructor(
     readonly modelPath: string,
@@ -108,6 +110,7 @@ export class LocalModelHost {
   }
 
   attach(repositoryId: string, localSessionId?: string): LocalModelHostHandle {
+    if (this.disposed) throw new Error("The local model host is closed.");
     if (this.isPlacementPending)
       throw new Error(
         "A local model instance is changing placement. Try again after the move completes.",
@@ -321,7 +324,31 @@ export class LocalModelHost {
     });
   }
 
+  /** Permanently closes the host, including in-flight loads and queued moves. */
+  dispose(): Promise<void> {
+    return (this.disposing ??= this.shutdown());
+  }
+
+  private async shutdown(): Promise<void> {
+    this.disposed = true;
+    this.cancelIdleStop();
+    this.loadingController?.abort(
+      new DOMException("The local model host is closed.", "AbortError"),
+    );
+    try {
+      await this.unload();
+    } finally {
+      await this.tail;
+      this.sessions.clear();
+      this.device = undefined;
+      this.status = "unloaded";
+      this.error = undefined;
+      this.onChange();
+    }
+  }
+
   async release(sessionId: string): Promise<void> {
+    if (this.disposed) return this.disposing;
     await this.enqueue(async () => {
       const session = this.sessions.get(sessionId);
       if (!session) return;
@@ -339,6 +366,7 @@ export class LocalModelHost {
   }
 
   private async ensureLoaded(cancelWhenUnused = false): Promise<LocalDevice> {
+    if (this.disposed) throw new Error("The local model host is closed.");
     if (this.status === "disk") throw new Error(DISK_ERROR);
     if (this.status === "ready" && this.device) return this.device;
     if (this.status === "loading")
@@ -427,7 +455,7 @@ export class LocalModelHost {
 
   private scheduleIdleStop(): void {
     this.cancelIdleStop();
-    if (this.active || this.status !== "ready") return;
+    if (this.disposed || this.active || this.status !== "ready") return;
     this.idleSince = Date.now();
     this.refreshIdleTimeout();
   }
@@ -475,10 +503,16 @@ export class LocalModelHost {
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.disposed)
+      return Promise.reject(new Error("The local model host is closed."));
     this.active++;
     this.cancelIdleStop();
     this.onChange();
-    const result = this.tail.then(operation, operation);
+    const run = (): Promise<T> => {
+      if (this.disposed) throw new Error("The local model host is closed.");
+      return operation();
+    };
+    const result = this.tail.then(run, run);
     this.tail = result.then(
       () => undefined,
       () => undefined,

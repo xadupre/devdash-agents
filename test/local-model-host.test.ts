@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { join } from "node:path";
 import {
   findLocalModelHost,
   LocalModelHost,
@@ -11,7 +12,7 @@ import type {
   LocalDevice,
   LocalGeneration,
 } from "../src/local-worker";
-import { resolveLocalDevice } from "../src/local-worker";
+import { LocalWorker, resolveLocalDevice } from "../src/local-worker";
 
 const device: LocalDevice = { provider: "cpu", deviceId: 0, name: "CPU" };
 
@@ -111,6 +112,150 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   });
   return { promise, resolve };
 }
+
+test("disposing a host stops its process during generation and frees every session cache", async (t) => {
+  const worker = new LocalWorker(process.execPath, [
+    join(__dirname, "fixtures", "local-worker.js"),
+    "cancel",
+  ]);
+  t.after(() => worker.stop());
+  const host = new LocalModelHost(
+    "/model",
+    { provider: "cpu", deviceId: 0 },
+    () => worker,
+  );
+  const first = host.attach("repo", "first");
+  const second = host.attach("repo", "second");
+  await first.load("/model", "cpu");
+  const started = deferred();
+  const generating = first.generateChat(
+    [{ role: "user", content: "hello" }],
+    started.resolve,
+  );
+  const rejected = assert.rejects(generating, /stopped/);
+  await started.promise;
+  const disposing = host.dispose();
+  assert.equal(host.dispose(), disposing);
+  await disposing;
+  await rejected;
+  assert.equal(host.snapshot().status, "unloaded");
+  assert.equal(host.snapshot().device, undefined);
+  assert.deepEqual(host.snapshot().sessions, []);
+  await assert.rejects(worker.discover(), /stopped/);
+  await Promise.all([first.stop(), second.stop()]);
+  assert.throws(() => host.attach("repo"), /closed/);
+  await assert.rejects(host.place({ provider: "cpu", deviceId: 0 }), /closed/);
+});
+
+test("disposing aborts a pending model load and rejects queued work without restarting it", async () => {
+  const worker = new Worker();
+  const started = deferred();
+  worker.loadGate = deferred().promise;
+  worker.loadStarted = started.resolve;
+  const host = new LocalModelHost(
+    "/model",
+    { provider: "cpu", deviceId: 0 },
+    () => worker,
+  );
+  const session = host.attach("repo");
+  const loading = session.load("/model", "cpu");
+  const loadRejected = assert.rejects(loading, /closed/);
+  await started.promise;
+  const queued = host.place({ provider: "cpu", deviceId: 1 });
+  const queueRejected = assert.rejects(queued, /closed/);
+  await host.dispose();
+  await Promise.all([loadRejected, queueRejected]);
+  assert.equal(worker.loads.length, 1);
+  assert.equal(worker.stops, 1);
+  assert.deepEqual(host.snapshot().sessions, []);
+  assert.equal(host.snapshot().idleStopAt, undefined);
+});
+
+test("disposing during a placement move prevents a late replacement worker", async () => {
+  const worker = new Worker();
+  const host = new LocalModelHost(
+    "/model",
+    { provider: "cpu", deviceId: 0 },
+    () => worker,
+  );
+  await host.attach("repo").load("/model", "cpu");
+  const entered = deferred();
+  const gate = deferred();
+  worker.stopStarted = entered.resolve;
+  worker.stopGate = gate.promise;
+  const moving = host.place({ provider: "cpu", deviceId: 1 });
+  const rejected = assert.rejects(moving, /closed/);
+  await entered.promise;
+  const disposing = host.dispose();
+  gate.resolve();
+  await disposing;
+  await rejected;
+  assert.equal(worker.loads.length, 1);
+  assert.equal(worker.stops, 1);
+  assert.equal(host.snapshot().status, "unloaded");
+});
+
+test("disposing an idle host clears caches and its idle timer", async () => {
+  const worker = new Worker();
+  const host = new LocalModelHost(
+    "/model",
+    { provider: "cpu", deviceId: 0 },
+    () => worker,
+    undefined,
+    undefined,
+    undefined,
+    () => 60_000,
+  );
+  const session = host.attach("repo");
+  await session.generateChat([{ role: "user", content: "hello" }], () => {});
+  assert.equal(host.snapshot().sessions[0]!.cacheTokens, 5);
+  assert.ok(host.snapshot().idleStopAt);
+  await host.dispose();
+  assert.equal(worker.stops, 1);
+  assert.deepEqual(host.snapshot().sessions, []);
+  assert.equal(host.snapshot().idleStopAt, undefined);
+  await assert.rejects(session.load("/model", "cpu"), /closed/);
+  assert.equal(worker.loads.length, 1);
+});
+
+test("disposing also stops a model loaded without an attached conversation", async () => {
+  const worker = new Worker();
+  const host = new LocalModelHost(
+    "/model",
+    { provider: "cpu", deviceId: 0 },
+    () => worker,
+  );
+  await host.place({ provider: "cpu", deviceId: 0 });
+  assert.equal(worker.loads.length, 1);
+  assert.deepEqual(host.snapshot().sessions, []);
+  await host.dispose();
+  assert.equal(worker.stops, 1);
+  assert.equal(host.snapshot().device, undefined);
+});
+
+test("disposing clears session accounting even if worker shutdown reports an error", async () => {
+  const failure = new Error("shutdown failed");
+  class FailingWorker extends Worker {
+    override async stop(): Promise<void> {
+      await super.stop();
+      throw failure;
+    }
+  }
+  const worker = new FailingWorker();
+  const host = new LocalModelHost(
+    "/model",
+    { provider: "cpu", deviceId: 0 },
+    () => worker,
+  );
+  await host
+    .attach("repo")
+    .generateChat([{ role: "user", content: "hello" }], () => {});
+  await assert.rejects(host.dispose(), (error) => error === failure);
+  assert.equal(worker.stops, 1);
+  assert.deepEqual(host.snapshot().sessions, []);
+  assert.equal(host.snapshot().device, undefined);
+  assert.equal(host.snapshot().status, "unloaded");
+});
 
 test("reuses hosts by effective automatic placements and prefers loaded hosts", async () => {
   const automaticWorker = new Worker();
