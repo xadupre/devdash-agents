@@ -354,8 +354,10 @@ export async function startWorkerService(options: {
         const trimmed = content.trim();
         let call: ReturnType<typeof toolCall> | undefined;
         if (tools.size && trimmed.startsWith("<tool_call>")) {
-          if (!trimmed.endsWith("</tool_call>"))
+          if (!trimmed.endsWith("</tool_call>")) {
             if (!truncated) throw new Error("Incomplete model function call.");
+            content = "";
+          }
           if (trimmed.endsWith("</tool_call>"))
             call = modelToolCall(JSON.parse(trimmed.slice(11, -12)) as unknown);
         } else if (tools.size && trimmed.startsWith("{")) {
