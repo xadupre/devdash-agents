@@ -125,7 +125,11 @@ again to rebuild its cache.
 
 The **Running workers** table at the top of the Sessions panel lists each
 loaded local model worker and each Copilot worker with open sessions, with its
-machine, model, device, status, session count and automatic stop time.
+machine, model, device, status, session count, automatic stop time and cache
+policy. Generator workers retain per-session KV caches between requests; Engine
+workers use a shared prefix cache and release request caches after generation.
+Copilot workers show CLI-managed caching. Local caches are discarded when the
+worker stops and are not saved to disk.
 **Stop** frees its memory immediately. A local model worker's process stops and
 its sessions stay open; their next request reloads the model and rebuilds the
 cache. A Copilot worker's CLI sessions are closed like **Close**: transcripts

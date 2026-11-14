@@ -113,6 +113,20 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
+test("host snapshots expose the model cache policy", () => {
+  for (const cachePolicy of ["shared-prefix", "per-session"] as const) {
+    const host = new LocalModelHost(
+      "/model",
+      { provider: "cpu", deviceId: 0 },
+      () => new Worker(),
+      undefined,
+      undefined,
+      { cachePolicy },
+    );
+    assert.equal(host.snapshot().cachePolicy, cachePolicy);
+  }
+});
+
 test("disposing a host stops its process during generation and frees every session cache", async (t) => {
   const worker = new LocalWorker(process.execPath, [
     join(__dirname, "fixtures", "local-worker.js"),

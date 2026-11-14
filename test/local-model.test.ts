@@ -7,6 +7,7 @@ import {
   inspectLocalModel,
   localModelName,
   localModelSize,
+  modelInfoFromConfig,
   validateLocalModelDirectory,
 } from "../src/local-model";
 
@@ -19,6 +20,7 @@ test("model inspection reads the configured context length and rejects invalid l
     name: basename(root),
     sizeBytes: Buffer.byteLength(config),
     contextLength: 40960,
+    cachePolicy: "per-session",
   });
 
   test("model inspection estimates KV bytes and detects shared CUDA cache allocation", async (t) => {
@@ -53,6 +55,25 @@ test("model inspection reads the configured context length and rejects invalid l
       JSON.stringify({ model: { context_length } }),
     );
     await assert.rejects(inspectLocalModel(root), /model.context_length/);
+  }
+});
+
+test("model cache policy follows the native dynamic batching engine selection", () => {
+  for (const [engine, expected] of [
+    [undefined, "per-session"],
+    [null, "per-session"],
+    [{}, "per-session"],
+    [{ dynamic_batching: {} }, "shared-prefix"],
+    [{ dynamic_batching: false }, "shared-prefix"],
+  ] as const) {
+    assert.equal(
+      modelInfoFromConfig(
+        { model: { context_length: 4096 }, engine },
+        "Qwen",
+        0,
+      ).cachePolicy,
+      expected,
+    );
   }
 });
 

@@ -963,6 +963,7 @@ export function activate(context: vscode.ExtensionContext): void {
           sizeBytes: modelInfo.sizeBytes,
           bytesPerToken: modelInfo.bytesPerToken,
           sharedBuffer: modelInfo.sharedBuffer,
+          cachePolicy: modelInfo.cachePolicy,
         },
         () => workerIdleMinutes() * 60_000,
         (message, level) => logEvent(modelInfo.name, message, level),

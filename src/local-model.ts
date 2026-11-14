@@ -11,6 +11,7 @@ export interface LocalModelInfo {
   contextLength: number;
   bytesPerToken?: Partial<Record<Exclude<LocalProvider, "auto">, number>>;
   sharedBuffer?: boolean;
+  cachePolicy?: "shared-prefix" | "per-session";
 }
 
 export async function inspectLocalModel(
@@ -92,6 +93,10 @@ export function modelInfoFromConfig(
     "past_present_share_buffer" in search
       ? search.past_present_share_buffer === true
       : undefined;
+  const engine =
+    config && typeof config === "object" && "engine" in config
+      ? config.engine
+      : undefined;
   if (
     typeof contextLength !== "number" ||
     !Number.isSafeInteger(contextLength) ||
@@ -104,6 +109,10 @@ export function modelInfoFromConfig(
     name,
     sizeBytes,
     contextLength,
+    cachePolicy:
+      engine && typeof engine === "object" && "dynamic_batching" in engine
+        ? "shared-prefix"
+        : "per-session",
     ...(bytesPerToken ? { bytesPerToken } : {}),
     ...(sharedBuffer !== undefined ? { sharedBuffer } : {}),
   };

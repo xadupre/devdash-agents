@@ -310,10 +310,10 @@ export function renderApplication(resources: {
     </div>
     <section id="sessions-view" aria-label="Local model sessions" hidden>
       <h2>Sessions</h2>
-      <p class="repository-hint">Local models are shared across repositories. Each session has a separate KV cache. KV size is an estimate; runtime allocator overhead may be higher.</p>
+      <p class="repository-hint">Local models are shared across repositories. Generator models keep per-session KV caches; Engine models use a shared prefix cache. KV size is an estimate; runtime allocator overhead may be higher.</p>
       <h3 id="worker-table-title">Running workers</h3>
       <table id="worker-table" aria-labelledby="worker-table-title">
-        <thead><tr><th scope="col">Worker</th><th scope="col">Machine</th><th scope="col">Model</th><th scope="col">Device</th><th scope="col">Status</th><th scope="col">Sessions</th><th scope="col">Auto-stop</th><th scope="col">Actions</th></tr></thead>
+        <thead><tr><th scope="col">Worker</th><th scope="col">Machine</th><th scope="col">Model</th><th scope="col">Device</th><th scope="col">Status</th><th scope="col">Sessions</th><th scope="col">Auto-stop</th><th scope="col">Cache policy</th><th scope="col">Actions</th></tr></thead>
         <tbody></tbody>
       </table>
       <p id="worker-table-empty">No worker is running.</p>

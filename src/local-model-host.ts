@@ -32,6 +32,7 @@ export interface LocalModelSnapshot {
   sizeBytes?: number;
   bytesPerToken?: LocalModelInfo["bytesPerToken"];
   sharedBuffer?: boolean;
+  cachePolicy?: LocalModelInfo["cachePolicy"];
   status: LocalModelStatus;
   placement: LocalPlacement;
   device?: LocalDevice;
@@ -97,7 +98,12 @@ export class LocalModelHost {
     private readonly onEmpty: () => void = () => {},
     private readonly metadata?: Pick<
       LocalModelSnapshot,
-      "name" | "contextLength" | "sizeBytes" | "bytesPerToken" | "sharedBuffer"
+      | "name"
+      | "contextLength"
+      | "sizeBytes"
+      | "bytesPerToken"
+      | "sharedBuffer"
+      | "cachePolicy"
     >,
     /** Milliseconds without activity before the worker process stops; 0 disables. */
     private readonly idleTimeoutMs: () => number = () => 0,
