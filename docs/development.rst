@@ -311,9 +311,8 @@ GitHub Actions
   for documentation PRs and pushes to ``main``. Successful default-branch builds
   deploy to GitHub Pages; PR builds never deploy. Select **GitHub Actions** as the
   Pages source in the repository settings. Scheduled and manual failures open an
-  issue. The :doc:`ci-status` page fetches public workflow results directly from
-  GitHub when opened, without credentials. API failures and rate limits are
-  shown as unavailable, with a link to Actions.
+  issue. CI status for the selected repository is available in the application's
+  **Github > CI** activity view.
 * **Release**: runs the same native package matrix for ``v*`` tags or published
   GitHub releases and attaches all five platform/variant VSIX assets.
 

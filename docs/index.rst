@@ -38,4 +38,3 @@ offline model, and the extension is not an official GitHub product.
    features
    design
    development
-   ci-status

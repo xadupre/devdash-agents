@@ -1794,6 +1794,7 @@ declare function acquireVsCodeApi(): {
   let selectedDiscussion: { id: string; url: string } | undefined;
   type GitHubSection = import("./github").GitHubSection;
   type GitHubPage = import("./github").GitHubPage;
+  type GitHubCiPage = import("./github").GitHubCiPage;
   type GitHubUpdate = import("./github").GitHubUpdate;
   type GitHubDiscussionUpdate = import("./github").GitHubDiscussionUpdate;
   type GitHubCommentUpdate = import("./github").GitHubCommentUpdate;
@@ -1804,13 +1805,14 @@ declare function acquireVsCodeApi(): {
     comments: "Comments",
     commits: "Commits",
     mentions: "Mentions",
+    ci: "CI status",
   };
   let githubSection: GitHubSection = "issues";
   const githubPages = new Map<
     string,
     {
       status: GitHubUpdate["status"];
-      page?: GitHubPage;
+      page?: GitHubPage | GitHubCiPage;
       error?: string;
     }
   >();
@@ -2975,7 +2977,10 @@ declare function acquireVsCodeApi(): {
     if (!id) return;
     const key = githubKey(id);
     const previous = githubPages.get(key);
-    const cursor = more ? previous?.page?.cursor : undefined;
+    const cursor =
+      more && previous?.page && "items" in previous.page
+        ? previous.page.cursor
+        : undefined;
     githubPages.set(key, {
       status: "loading",
       page: more ? previous?.page : undefined,
@@ -2988,6 +2993,10 @@ declare function acquireVsCodeApi(): {
     const id = state?.activeId;
     const key = id ? githubKey(id) : githubSection;
     const entry = id ? githubPages.get(key) : undefined;
+    const ciPage =
+      entry?.page && "workflows" in entry.page ? entry.page : undefined;
+    const listPage =
+      entry?.page && "items" in entry.page ? entry.page : undefined;
     if (id && !entry) {
       requestGitHub();
       return;
@@ -3006,22 +3015,25 @@ declare function acquireVsCodeApi(): {
     element("github-heading", HTMLElement).textContent =
       githubLabels[githubSection];
     githubRefresh.disabled = !id || entry?.status === "loading";
-    githubMore.hidden = !entry?.page?.cursor;
+    githubMore.hidden = !listPage?.cursor;
     githubMore.disabled = entry?.status === "loading";
     const status = element("github-status", HTMLElement);
     status.textContent = !id
       ? "Select a repository to view its activity."
       : entry?.status === "loading"
         ? "Loading repository activity..."
-        : entry?.page
-          ? `${entry.page.repository}${entry.page.viewer ? ` - ${entry.page.viewer}` : ""} (${entry.page.items.length})`
-          : "";
+        : ciPage
+          ? `${ciPage.repository} - default branch ${ciPage.defaultBranch}`
+          : listPage
+            ? `${listPage.repository}${listPage.viewer ? ` - ${listPage.viewer}` : ""} (${listPage.items.length})`
+            : "";
     githubItems.setAttribute("aria-busy", String(entry?.status === "loading"));
     const failure = element("github-error", HTMLElement);
     failure.textContent = entry?.error ?? "";
     failure.hidden = !entry?.error;
     const notice = element("github-notice", HTMLElement);
-    notice.textContent = entry?.page?.notice ?? "";
+    notice.textContent =
+      entry?.page && "notice" in entry.page ? (entry.page.notice ?? "") : "";
     notice.hidden = !notice.textContent;
     githubItems.replaceChildren();
     const link = (label: string, href?: string): HTMLElement => {
@@ -3033,7 +3045,77 @@ declare function acquireVsCodeApi(): {
       }
       return node;
     };
-    for (const item of entry?.page?.items ?? []) {
+    if (ciPage) {
+      const summary = document.createElement("p");
+      summary.className = "github-metadata";
+      summary.textContent =
+        `Fetched ${new Date(ciPage.fetchedAt).toLocaleString()}. ` +
+        "Failure ratio uses completed successes and failures created in the last 24 hours, across branches.";
+      githubItems.append(summary);
+      const table = document.createElement("table");
+      table.className = "github-ci-table";
+      const header = document.createElement("tr");
+      for (const label of [
+        "Workflow",
+        "Latest default-branch run",
+        "Failure ratio (24 hours)",
+      ]) {
+        const cell = document.createElement("th");
+        cell.scope = "col";
+        cell.textContent = label;
+        header.append(cell);
+      }
+      const head = document.createElement("thead");
+      head.append(header);
+      const body = document.createElement("tbody");
+      table.append(head, body);
+      for (const workflow of ciPage.workflows) {
+        const row = document.createElement("tr");
+        const name = document.createElement("td");
+        name.append(link(workflow.name, workflow.url));
+        const latest = document.createElement("td");
+        if (workflow.latest) {
+          const status =
+            workflow.latest.status === "completed"
+              ? (workflow.latest.conclusion ?? "unknown")
+              : workflow.latest.status;
+          const failed = ["failure", "timed_out", "startup_failure"].includes(
+            status,
+          );
+          latest.append(
+            link(
+              `${failed ? "BROKEN: " : ""}${status} (${new Date(
+                workflow.latest.createdAt,
+              ).toLocaleString()})`,
+              workflow.latest.url,
+            ),
+          );
+        } else {
+          latest.textContent = workflow.latestError
+            ? `Unavailable: ${workflow.latestError}`
+            : "No runs";
+        }
+        const ratio = document.createElement("td");
+        ratio.textContent = workflow.ratioError
+          ? `Unavailable: ${workflow.ratioError}`
+          : workflow.ratio?.total
+            ? `${((100 * workflow.ratio.failed) / workflow.ratio.total).toFixed(1)}% (${workflow.ratio.failed}/${workflow.ratio.total})`
+            : "N/A (no successful or failed runs)";
+        row.append(name, latest, ratio);
+        body.append(row);
+      }
+      table.setAttribute("aria-label", "GitHub Actions workflow health");
+      githubItems.append(table);
+      if (!ciPage.workflows.length) {
+        const empty = document.createElement("p");
+        empty.textContent = "No repository workflows found.";
+        githubItems.append(empty);
+      }
+      return;
+    }
+    for (const item of entry?.page && "items" in entry.page
+      ? entry.page.items
+      : []) {
       const card = document.createElement("article");
       card.className = "github-item";
       card.classList.toggle("github-mine", item.mine);
@@ -3111,7 +3193,12 @@ declare function acquireVsCodeApi(): {
       }
       githubItems.append(card);
     }
-    if (entry?.status === "ready" && !entry.page?.items.length) {
+    if (
+      entry?.status === "ready" &&
+      entry.page &&
+      "items" in entry.page &&
+      !entry.page.items.length
+    ) {
       githubItems.textContent =
         githubSection === "mentions"
           ? "No unanswered mentions in this page."
@@ -3132,7 +3219,8 @@ declare function acquireVsCodeApi(): {
       section === "oldest-prs" ||
       section === "comments" ||
       section === "mentions" ||
-      section === "commits"
+      section === "commits" ||
+      section === "ci"
     ) {
       githubSection = section;
       renderGitHub();
@@ -4143,7 +4231,11 @@ declare function acquireVsCodeApi(): {
         const key = JSON.stringify([update.id, update.section]);
         const previous = githubPages.get(key);
         const page =
-          update.page && update.append && previous?.page
+          update.page &&
+          "items" in update.page &&
+          update.append &&
+          previous?.page &&
+          "items" in previous.page
             ? {
                 ...update.page,
                 items: [
@@ -4155,7 +4247,7 @@ declare function acquireVsCodeApi(): {
                 ],
               }
             : (update.page ?? (update.append ? previous?.page : undefined));
-        if (page) {
+        if (page && "items" in page) {
           page.items.sort((a, b) =>
             update.section === "oldest-prs"
               ? Date.parse(a.date) - Date.parse(b.date)

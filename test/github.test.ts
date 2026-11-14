@@ -113,6 +113,150 @@ function fixture(
   return { run, calls };
 }
 
+function workflowRun(
+  id: number,
+  conclusion: string | null,
+  status = "completed",
+  createdAt = new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+) {
+  return {
+    id,
+    status,
+    conclusion,
+    created_at: createdAt,
+    html_url: `https://github.com/acme/project/actions/runs/${id}`,
+  };
+}
+
+function ciFixture(respond: (path: string, url: URL) => unknown): {
+  run: CommandRunner;
+  calls: string[][];
+} {
+  const calls: string[][] = [];
+  const run: CommandRunner = async (file, args, cwd, signal) => {
+    signal.throwIfAborted();
+    assert.equal(file, "gh");
+    assert.equal(cwd, "/projects/project");
+    calls.push(args);
+    if (args[0] === "repo") {
+      return JSON.stringify({
+        nameWithOwner: "acme/project",
+        url: "https://github.com/acme/project",
+      });
+    }
+    assert.deepEqual(args.slice(0, 3), ["api", "--hostname", "github.com"]);
+    const path = args[3]!;
+    const url = new URL(path, "https://api.github.com");
+    for (let index = 4; index < args.length; index += 2) {
+      assert.equal(args[index], "-f");
+      const [key, ...value] = args[index + 1]!.split("=");
+      url.searchParams.set(key!, value.join("="));
+    }
+    return JSON.stringify(respond(path, url));
+  };
+  return { run, calls };
+}
+
+test("CI activity loads the selected repository's latest runs and complete 24-hour ratios", async () => {
+  const source = ciFixture((_path, url) => {
+    if (url.pathname === "/repos/acme/project") {
+      return { default_branch: "trunk" };
+    }
+    if (url.pathname.endsWith("/actions/workflows")) {
+      return {
+        total_count: 1,
+        workflows: [{ id: 12, name: "Build" }],
+      };
+    }
+    if (url.searchParams.has("branch")) {
+      assert.equal(url.searchParams.get("branch"), "trunk");
+      return { workflow_runs: [workflowRun(34, "failure")] };
+    }
+    const since = url.searchParams.get("created");
+    assert.match(since ?? "", /^>=.+ <=.+$/);
+    const now = Date.now();
+    const inWindow = new Date(now - 60 * 60 * 1000).toISOString();
+    return {
+      total_count: 4,
+      workflow_runs: [
+        workflowRun(1, "success", "completed", inWindow),
+        workflowRun(2, "failure", "completed", inWindow),
+        workflowRun(3, null, "in_progress", inWindow),
+        workflowRun(4, "cancelled", "completed", inWindow),
+      ],
+    };
+  });
+  const result = await new GitHubRepository(
+    "/projects/project",
+    source.run,
+  ).loadCi(new AbortController().signal);
+  assert.equal(result.repository, "acme/project");
+  assert.equal(result.defaultBranch, "trunk");
+  assert.equal(result.workflows[0]?.latest?.status, "completed");
+  assert.equal(result.workflows[0]?.latest?.conclusion, "failure");
+  assert.equal(
+    result.workflows[0]?.latest?.url,
+    "https://github.com/acme/project/actions/runs/34",
+  );
+  assert.deepEqual(result.workflows[0]?.ratio, { failed: 1, total: 2 });
+  assert.ok(result.fetchedAt);
+  assert.ok(
+    source.calls.some(
+      (args) =>
+        args[3] === "repos/acme/project/actions/workflows/12/runs" &&
+        args.includes("branch=trunk") &&
+        args.includes("per_page=1"),
+    ),
+  );
+  const createdQuery = source.calls
+    .flat()
+    .find((argument) => argument.startsWith("created="))
+    ?.slice("created=".length);
+  const [start, end] = createdQuery?.split(" ") ?? [];
+  assert.ok(start);
+  assert.ok(end);
+  assert.ok(start.startsWith(">="));
+  assert.ok(end.startsWith("<="));
+  assert.ok(Math.abs(Date.parse(end.slice(2)) - Date.now()) < 1000);
+  assert.ok(
+    Math.abs(
+      Date.parse(end.slice(2)) - Date.parse(start.slice(2)) - 86_400_000,
+    ) < 1000,
+  );
+});
+
+test("CI activity rejects duplicate runs shifted across pagination boundaries", async () => {
+  const source = ciFixture((_path, url) => {
+    if (url.pathname === "/repos/acme/project") {
+      return { default_branch: "main" };
+    }
+    if (url.pathname.endsWith("/actions/workflows")) {
+      return {
+        total_count: 1,
+        workflows: [{ id: 12, name: "Build" }],
+      };
+    }
+    if (url.searchParams.has("branch")) {
+      return { workflow_runs: [] };
+    }
+    const page = url.searchParams.get("page");
+    return {
+      total_count: 101,
+      workflow_runs:
+        page === "1"
+          ? Array.from({ length: 100 }, (_, index) =>
+              workflowRun(index + 1, "success"),
+            )
+          : [workflowRun(100, "success"), workflowRun(101, "failure")],
+    };
+  });
+  const result = await new GitHubRepository(
+    "/projects/project",
+    source.run,
+  ).loadCi(new AbortController().signal);
+  assert.match(result.workflows[0]?.ratioError ?? "", /Duplicate runs/);
+});
+
 test("issue and PR comments use one explicit POST with a private JSON payload and the exact literal Unicode body", async () => {
   const body =
     "  **Comment**\n\n$(not a command) = --flag  " + "\u6f22".repeat(50_000);
