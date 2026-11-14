@@ -109,7 +109,8 @@ Tool-capable responses are buffered until their call can be validated.
 Models must follow these instructions reliably; this does not add native
 function-calling training. Images, structured outputs, multiple completions and
 forced tool choices are unsupported. Generation uses the worker's defaults and
-the service's total token limit, not OpenAI sampling or output-token parameters.
+the service's total token limit. OpenAI sampling, stop-sequence and output-token
+parameters are rejected rather than silently ignored; clients must omit them.
 Only one request runs at a time (others receive HTTP 429); requests time out after
 two minutes, and disconnecting cancels generation. There is no Copilot/cloud fallback.
 Authentication with the environment key is required on every endpoint, browser origins are rejected,

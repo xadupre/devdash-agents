@@ -154,6 +154,32 @@ test("service hands functions back to Copilot and translates tool history withou
   assert.deepEqual(released, sessions);
 });
 
+test("Harmony commentary does not hide a function handoff in JSON or SSE", async (t) => {
+  const service = await setup(t, {
+    async generateChat(_messages, onToken) {
+      const output =
+        "<|channel|>commentary<|message|>Inspecting.<|end|>" +
+        "<|start|>assistant to=inspect_repository<|channel|>commentary<|message|>{}<|call|>";
+      for (const character of output) onToken(character);
+      return { cachedTokens: 0, generatedTokens: 4, cacheTokens: 12 };
+    },
+    async release() {},
+  });
+  const response = await service.post({ ...request, tools });
+  const choice = (await response.json()).choices[0];
+  assert.equal(choice.finish_reason, "tool_calls");
+  assert.equal(choice.message.content, "Inspecting.");
+  assert.equal(
+    choice.message.tool_calls[0].function.name,
+    "inspect_repository",
+  );
+  const streamed = await service.post({ ...request, tools, stream: true });
+  const output = await streamed.text();
+  assert.match(output, /"content":"Inspecting\."/);
+  assert.match(output, /"finish_reason":"tool_calls"/);
+  assert.match(output, /"name":"inspect_repository"/);
+});
+
 test("service rejects invalid input before inference and remains usable", async (t) => {
   const service = await setup(t);
   for (const body of [
@@ -206,6 +232,25 @@ test("service rejects invalid input before inference and remains usable", async 
     404,
   );
   assert.equal((await service.post(request)).status, 200);
+});
+
+test("service explicitly rejects unsupported generation controls", async (t) => {
+  const service = await setup(t);
+  for (const [parameter, value] of Object.entries({
+    max_tokens: 1,
+    max_completion_tokens: 1,
+    temperature: 0.1,
+    top_p: 1,
+    stop: ["end"],
+    presence_penalty: 1,
+    frequency_penalty: 1,
+    logit_bias: {},
+    seed: 1,
+  })) {
+    const response = await service.post({ ...request, [parameter]: value });
+    assert.equal(response.status, 400, parameter);
+    assert.match((await response.json()).error.message, new RegExp(parameter));
+  }
 });
 
 test("service bounds request bodies without closing the socket before its error response", async (t) => {

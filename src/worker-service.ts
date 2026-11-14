@@ -53,6 +53,22 @@ function text(value: unknown): string {
 
 function translateRequest(body: Record<string, unknown>, model: string) {
   if (body.model !== model) invalid("Unknown model.");
+  for (const parameter of [
+    "max_tokens",
+    "max_completion_tokens",
+    "temperature",
+    "top_p",
+    "stop",
+    "presence_penalty",
+    "frequency_penalty",
+    "logit_bias",
+    "seed",
+  ]) {
+    if (body[parameter] !== undefined && body[parameter] !== null)
+      invalid(
+        `${parameter} is unsupported; generation uses the worker defaults and service max-length.`,
+      );
+  }
   if (body.stream !== undefined && typeof body.stream !== "boolean")
     invalid("stream must be a boolean.");
   if (body.n !== undefined && body.n !== 1)
@@ -284,6 +300,7 @@ export async function startWorkerService(options: {
           chunk({ role: "assistant", content: "" });
         }
         let content = "";
+        let commentary = "";
         let bytes = 0;
         const parser = new LocalResponse(
           (part) => {
@@ -292,7 +309,8 @@ export async function startWorkerService(options: {
           },
           () => {},
           (part) => {
-            content += part;
+            commentary += part;
+            if (stream && !tools.size) chunk({ content: part });
           },
         );
         generated = true;
@@ -357,11 +375,12 @@ export async function startWorkerService(options: {
             ? "length"
             : "stop";
         if (stream) {
-          if (calls)
+          if (calls) {
+            if (commentary) chunk({ content: commentary });
             chunk({
               tool_calls: calls.map((value, index) => ({ index, ...value })),
             });
-          else if (tools.size) chunk({ content });
+          } else if (tools.size) chunk({ content: commentary + content });
           chunk({}, finishReason);
           response.end("data: [DONE]\n\n");
         } else {
@@ -379,7 +398,7 @@ export async function startWorkerService(options: {
                 index: 0,
                 message: {
                   role: "assistant",
-                  content: calls ? null : content,
+                  content: calls ? commentary || null : commentary + content,
                   ...(calls ? { tool_calls: calls } : {}),
                 },
                 finish_reason: finishReason,
