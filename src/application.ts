@@ -25,9 +25,11 @@ import {
   type PostMortemSource,
 } from "./postmortem";
 import {
+  collectSessionDiff,
   findDiscussionReferences,
   type SessionExportSource,
 } from "./session-export";
+import { datasetMetrics } from "./dataset";
 import {
   isLocalProvider,
   type ContextReductionMode,
@@ -115,6 +117,12 @@ export interface DatasetSession {
   backend: "local" | "copilot";
   location: "current" | "archived" | "parallel";
   models: string[];
+  worker?: string;
+  promptCount: number;
+  toolCallCount: number;
+  durationMs?: number;
+  date?: string;
+  finalDiffSize?: number;
   references: string[];
   annotation?: SessionAnnotation;
 }
@@ -208,6 +216,7 @@ interface RepositorySession {
   backend?: "local" | "copilot";
   recordId: string;
   models?: string[];
+  finalDiffSize?: number;
   annotation?: SessionAnnotation;
   context?: string;
   repository: Repository;
@@ -912,6 +921,7 @@ export class AgentApplication {
             copilotSaved?.assignment &&
             structuredClone(copilotSaved.assignment),
           models: copilotSaved?.models?.slice(),
+          finalDiffSize: copilotSaved?.finalDiffSize,
           annotation: copilotSaved?.annotation,
           context: copilotSaved?.context,
           status: copilotSaved?.sessionId ? "saved" : "idle",
@@ -942,6 +952,7 @@ export class AgentApplication {
             assignment:
               localSaved.assignment && structuredClone(localSaved.assignment),
             models: localSaved.models?.slice(),
+            finalDiffSize: localSaved.finalDiffSize,
             annotation: localSaved.annotation,
             context: localSaved.context,
             status: "idle",
@@ -1360,7 +1371,7 @@ export class AgentApplication {
         sessionId: conversation.sessionId,
         backend: conversation.backend ?? "copilot",
         location,
-        models: conversation.models?.slice() ?? [],
+        ...datasetMetrics(conversation),
         references: findDiscussionReferences(conversation),
         ...(conversation.annotation
           ? { annotation: { ...conversation.annotation } }
@@ -1965,6 +1976,8 @@ export class AgentApplication {
         ...(images?.length ? { images } : {}),
       });
     const user = queuedMessage ?? session.messages.at(-1)!;
+    user.timestamp ??= new Date().toISOString();
+    session.finalDiffSize = undefined;
     user.timings = [];
     session.timing = new ExecutionTiming(user.timings);
     session.draft = "";
@@ -2006,6 +2019,7 @@ export class AgentApplication {
       } finally {
         session.timing?.finish();
         session.timing = undefined;
+        await this.captureFinalDiffSize(session);
         this.clearPendingRequests(id, session);
         this.onChange();
       }
@@ -2050,6 +2064,7 @@ export class AgentApplication {
     const prompt = buildPrompt(question, selection);
     const user: ChatMessage = {
       role: "user",
+      timestamp: new Date().toISOString(),
       title: label,
       content: question.trim(),
       ...(images?.length ? { images } : {}),
@@ -2140,6 +2155,7 @@ export class AgentApplication {
       } finally {
         child.timing?.finish();
         child.timing = undefined;
+        await this.captureFinalDiffSize(child);
         this.clearPendingRequests(parent.repository.id, child);
         try {
           await child.conversation?.dispose();
@@ -2540,6 +2556,7 @@ export class AgentApplication {
         saved.assignment && structuredClone(saved.assignment);
     session.recordId = saved?.recordId ?? randomUUID();
     session.models = saved?.models?.slice();
+    session.finalDiffSize = saved?.finalDiffSize;
     session.annotation = saved?.annotation
       ? { ...saved.annotation }
       : undefined;
@@ -2598,6 +2615,21 @@ export class AgentApplication {
     if (!models.includes(model)) models.push(model);
   }
 
+  private async captureFinalDiffSize(
+    session: RepositorySession,
+  ): Promise<void> {
+    if (this.closed) return;
+    try {
+      const { diff } = await collectSessionDiff(
+        { repository: session.repository, conversation: session },
+        AbortSignal.timeout(10_000),
+      );
+      session.finalDiffSize = Buffer.byteLength(diff, "utf8");
+    } catch {
+      session.finalDiffSize = undefined;
+    }
+  }
+
   private copyMessage(message: ChatMessage): ChatMessage {
     return {
       ...message,
@@ -2619,6 +2651,9 @@ export class AgentApplication {
       ...(session.context !== undefined ? { context: session.context } : {}),
       ...(session.annotation ? { annotation: { ...session.annotation } } : {}),
       generatedTokens: session.generatedTokens,
+      ...(session.finalDiffSize !== undefined
+        ? { finalDiffSize: session.finalDiffSize }
+        : {}),
       draft: session.draft,
       messages: session.messages.map((message) => this.copyMessage(message)),
       ...(session.postMortem

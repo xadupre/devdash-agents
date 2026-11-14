@@ -15,6 +15,7 @@ import { LocalWorker, type LocalChatMessage } from "../src/local-worker";
 import { ApplicationStorage, type SavedApplication } from "../src/storage";
 import { testImage, waitForRequest } from "./helpers";
 import { describePermission } from "../src/presentation";
+import { runCommand } from "../src/github";
 import {
   generatePostMortem,
   type PostMortemProgress,
@@ -1821,6 +1822,15 @@ test("dataset annotations and used models follow sessions through archiving and 
   await application.openSession(alpha);
   await application.send(alpha, "Implement #84", false);
   const first = application.getDatasetSessions()[0]!;
+  assert.equal(first.promptCount, 1);
+  assert.equal(
+    first.toolCallCount,
+    application.getState().messages.filter((message) => message.role === "tool")
+      .length,
+  );
+  assert.ok(first.durationMs! >= 0);
+  assert.ok(Number.isFinite(Date.parse(first.date!)));
+  assert.equal(first.finalDiffSize, undefined);
   assert.deepEqual(first.references, ["#84"]);
   assert.ok(first.models.includes("fixture"));
   assert.throws(
@@ -1853,6 +1863,10 @@ test("dataset annotations and used models follow sessions through archiving and 
   assert.deepEqual(after.annotation, archived.annotation);
   assert.deepEqual(after.models, archived.models);
   assert.deepEqual(after.references, ["#84"]);
+  assert.equal(after.promptCount, first.promptCount);
+  assert.equal(after.toolCallCount, first.toolCallCount);
+  assert.equal(after.durationMs, first.durationMs);
+  assert.equal(after.date, first.date);
   restored.annotateSession(alpha, first.recordId, { mark: "success" });
   assert.equal(
     restored.getDatasetSessionExport(alpha, first.recordId).conversation
@@ -1871,6 +1885,93 @@ test("dataset annotations and used models follow sessions through archiving and 
   assert.equal(
     withoutAnnotation.getDatasetSessionExport(alpha, first.recordId)
       .conversation.annotation,
+    undefined,
+  );
+});
+
+test("dataset final diff bytes survive cancellation, archiving and restoration", async (t) => {
+  const { application, root, createApplication, waitForPermission } =
+    await setup(t, "permission");
+  const alpha = join(root, "alpha");
+  const signal = AbortSignal.timeout(10_000);
+  const git = (args: string[]) => runCommand("git", args, alpha, signal);
+  await git(["init", "--quiet"]);
+  await writeFile(join(alpha, "tracked.txt"), "before\n");
+  await git(["add", "."]);
+  await git([
+    "-c",
+    "user.name=Example",
+    "-c",
+    "user.email=example@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--quiet",
+    "-m",
+    "initial",
+  ]);
+  await application.openSession(alpha);
+  await writeFile(join(alpha, "tracked.txt"), "after é\n");
+  const sending = application.send(alpha, "First request");
+  application.respondToPermission((await waitForPermission(alpha)).id, true);
+  await sending;
+  const first = application.getDatasetSessions()[0]!;
+  const diff = await git([
+    "-c",
+    "core.fsmonitor=false",
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--binary",
+    "HEAD",
+    "--",
+  ]);
+  assert.equal(first.finalDiffSize, Buffer.byteLength(diff, "utf8"));
+  assert.ok(first.finalDiffSize! > 0);
+  await writeFile(join(alpha, "tracked.txt"), "before\n");
+  const second = application.send(alpha, "Second request");
+  application.respondToPermission((await waitForPermission(alpha)).id, true);
+  await second;
+  assert.equal(application.getDatasetSessions()[0]!.finalDiffSize, 0);
+  await writeFile(join(alpha, "tracked.txt"), "after é\n");
+  const cancelled = assert.rejects(
+    application.send(alpha, "Cancelled request"),
+    /cancel|abort/i,
+  );
+  await waitForPermission(alpha);
+  const queued = assert.rejects(
+    application.send(alpha, "Never sent", false),
+    /cancel|abort/i,
+  );
+  application.cancel(alpha);
+  await Promise.all([cancelled, queued]);
+  assert.equal(
+    application.getDatasetSessions()[0]!.finalDiffSize,
+    first.finalDiffSize,
+  );
+  await application.newSession(alpha);
+  const archived = application
+    .getDatasetSessions()
+    .find((row) => row.recordId === first.recordId)!;
+  assert.equal(archived.finalDiffSize, first.finalDiffSize);
+  assert.equal(archived.promptCount, 3);
+  const restored = createApplication(application.getSnapshot());
+  await restored.refresh();
+  assert.equal(
+    restored
+      .getDatasetSessions()
+      .find((row) => row.recordId === first.recordId)!.finalDiffSize,
+    first.finalDiffSize,
+  );
+  assert.equal(
+    restored.getDatasetSessionExport(alpha, first.recordId).conversation
+      .finalDiffSize,
+    first.finalDiffSize,
+  );
+  assert.equal(
+    application.getDatasetSessions().find((row) => row.location === "current")
+      ?.finalDiffSize,
     undefined,
   );
 });

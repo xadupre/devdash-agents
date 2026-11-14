@@ -172,7 +172,14 @@ before sharing it.
 The **Dataset** tab lists recorded current and archived sessions across
 repositories, including parallel and local sessions. Annotate any session as
 success, failure or abandon (the latter two require a reason), and export it
-from the table. Model information from older recordings may be unavailable.
+from the table. The table shows prompt and tool-call counts, active duration
+(excluding gaps between prompts), the first recorded date, and final diff size
+in UTF-8 bytes. Diff size is captured after each request using the same PR or
+tracked working-tree diff as JSON export; unavailable values are shown as “—”.
+Worker names are accompanied by recorded model IDs or paths from the saved
+session assignment, independent of later worker configuration changes.
+Older recordings may lack model, timing or diff information; duration falls
+back to the span of recorded timestamps when step timings are unavailable.
 
 After work finishes, **PostMortem** in the selected repository's context menu
 can still generate an evidence-linked report using separate tool-free model

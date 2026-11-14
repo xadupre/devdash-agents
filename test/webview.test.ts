@@ -2708,6 +2708,12 @@ test("dataset panel lists sessions and validates annotations before saving or ex
       location: "archived",
       models: ["model-a"],
       references: ["#84"],
+      worker: "Worker A",
+      promptCount: 12,
+      toolCallCount: 34,
+      durationMs: 1250,
+      date: "2026-11-14T09:00:00.000Z",
+      finalDiffSize: 2048,
     },
     {
       repository: { id: "beta", name: "Beta", path: "/projects/beta" },
@@ -2730,6 +2736,14 @@ test("dataset panel lists sessions and validates annotations before saving or ex
   assert.equal(rows.length, 2);
   assert.match(rows[0]!.textContent!, /Alpha.*archived.*model-a.*#84/);
   assert.match(rows[1]!.textContent!, /Beta.*success.*Good result/);
+  assert.deepEqual(
+    [...rows[0]!.cells].slice(5, 11).map((cell) => cell.textContent),
+    ["Worker A", "12", "34", "1.25 s", "2026-11-14T09:00:00.000Z", "2048"],
+  );
+  assert.deepEqual(
+    [...rows[1]!.cells].slice(5, 11).map((cell) => cell.textContent),
+    ["Unknown", "0", "0", "—", "—", "—"],
+  );
   rows[0]!.querySelectorAll<HTMLButtonElement>("button")[0]!.click();
   const form = document.querySelector<HTMLFormElement>("#dataset-annotation")!;
   const mark = document.querySelector<HTMLSelectElement>("#dataset-mark")!;
@@ -2816,6 +2830,12 @@ test("dataset columns sort in both directions and retain sorting after refresh",
       models: ["model-10"],
       references: ["#10"],
       annotation: { mark: "success" },
+      worker: "Worker 10",
+      promptCount: 10,
+      toolCallCount: 100,
+      durationMs: 10000,
+      date: "2026-11-14T10:00:00.000Z",
+      finalDiffSize: 1000,
     },
     {
       repository: { id: "alpha", name: "alpha", path: "/projects/alpha" },
@@ -2826,6 +2846,12 @@ test("dataset columns sort in both directions and retain sorting after refresh",
       models: ["model-2"],
       references: ["#2"],
       annotation: { mark: "failure", reason: "Tests failed" },
+      worker: "Worker 2",
+      promptCount: 2,
+      toolCallCount: 20,
+      durationMs: 2000,
+      date: "2026-11-14T02:00:00.000Z",
+      finalDiffSize: 200,
     },
     {
       repository: { id: "beta", name: "Beta", path: "/projects/beta" },
@@ -2835,6 +2861,12 @@ test("dataset columns sort in both directions and retain sorting after refresh",
       models: ["model-1"],
       references: ["#1"],
       annotation: { mark: "abandon", reason: "Cancelled" },
+      worker: "Worker 1",
+      promptCount: 0,
+      toolCallCount: 0,
+      durationMs: 0,
+      date: "2026-11-14T01:00:00.000Z",
+      finalDiffSize: 0,
     },
   ];
   const publish = (items = sessions): void => {
@@ -2856,6 +2888,7 @@ test("dataset columns sort in both directions and retain sorting after refresh",
     ["Beta", "alpha", "Zeta"],
     ["Beta", "alpha", "Zeta"],
     ["Beta", "alpha", "Zeta"],
+    ...Array.from({ length: 6 }, () => ["Beta", "alpha", "Zeta"]),
   ];
   expected.forEach((ascending, column) => {
     const header = headers[column]!;
@@ -2863,7 +2896,7 @@ test("dataset columns sort in both directions and retain sorting after refresh",
     button.click();
     assert.deepEqual(order(), ascending);
     assert.equal(header.getAttribute("aria-sort"), "ascending");
-    headers.slice(0, 5).forEach((other, index) => {
+    headers.slice(0, -1).forEach((other, index) => {
       if (index !== column)
         assert.equal(other.getAttribute("aria-sort"), "none");
     });
@@ -2871,7 +2904,7 @@ test("dataset columns sort in both directions and retain sorting after refresh",
     assert.deepEqual(order(), [...ascending].reverse());
     assert.equal(header.getAttribute("aria-sort"), "descending");
   });
-  assert.equal(headers[5]!.querySelector("button"), null);
+  assert.equal(headers.at(-1)!.querySelector("button"), null);
   publish();
   assert.deepEqual(order(), ["Zeta", "alpha", "Beta"]);
   const actions = table.tBodies[0]!.rows[1]!.querySelector(".dataset-actions")!;

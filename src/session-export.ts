@@ -290,12 +290,11 @@ async function loadDiscussions(
   return { discussions, unresolved };
 }
 
-export async function exportSessionJson(
+export async function collectSessionDiff(
   source: SessionExportSource,
   signal: AbortSignal,
   run?: CommandRunner,
-  onWarning?: (message: string) => void,
-): Promise<string> {
+) {
   signal.throwIfAborted();
   const machine = source.conversation.assignment?.executionMachine;
   const cwd = machine
@@ -386,6 +385,25 @@ export async function exportSessionJson(
     );
   }
   signal.throwIfAborted();
+  return { commit, diff, pullRequest, remotes };
+}
+
+export async function exportSessionJson(
+  source: SessionExportSource,
+  signal: AbortSignal,
+  run?: CommandRunner,
+  onWarning?: (message: string) => void,
+): Promise<string> {
+  const machine = source.conversation.assignment?.executionMachine;
+  const cwd = machine
+    ? machineRepositoryPath(machine, source.repository.path)
+    : source.repository.path;
+  run ??= machine?.command ? remoteCommandRunner(machine) : runCommand;
+  const { commit, diff, pullRequest, remotes } = await collectSessionDiff(
+    source,
+    signal,
+    run,
+  );
   const references = [
     ...findDiscussionMentions(source.conversation),
     ...(pullRequest?.closingIssues ?? []),

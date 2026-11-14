@@ -366,8 +366,14 @@ declare function acquireVsCodeApi(): {
     const body = datasetTable.tBodies[0]!;
     const rows = [...body.rows].sort(
       (a, b) =>
-        (a.cells[column]!.textContent ?? "").localeCompare(
-          b.cells[column]!.textContent ?? "",
+        (
+          a.cells[column]!.dataset.sortValue ??
+          a.cells[column]!.textContent ??
+          ""
+        ).localeCompare(
+          b.cells[column]!.dataset.sortValue ??
+            b.cells[column]!.textContent ??
+            "",
           undefined,
           { numeric: true, sensitivity: "base" },
         ) * (datasetSortAscending ? 1 : -1),
@@ -475,9 +481,10 @@ declare function acquireVsCodeApi(): {
     const body = datasetTable.tBodies[0]!;
     const rows = sessions.map((session) => {
       const row = document.createElement("tr");
-      const cell = (text: string): void => {
+      const cell = (text: string, sortValue?: number): void => {
         const item = document.createElement("td");
         item.textContent = text;
+        if (sortValue !== undefined) item.dataset.sortValue = String(sortValue);
         row.append(item);
       };
       cell(session.repository.name);
@@ -496,6 +503,21 @@ declare function acquireVsCodeApi(): {
               .filter(Boolean)
               .join(" · ")
           : "Not annotated",
+      );
+      cell(session.worker ?? "Unknown");
+      cell(String(session.promptCount ?? 0));
+      cell(String(session.toolCallCount ?? 0));
+      cell(
+        session.durationMs === undefined
+          ? "—"
+          : `${(session.durationMs / 1000).toFixed(2)} s`,
+        session.durationMs,
+      );
+      cell(session.date ?? "—");
+      cell(
+        session.finalDiffSize === undefined
+          ? "—"
+          : String(session.finalDiffSize),
       );
       const actions = document.createElement("td");
       const edit = document.createElement("button");

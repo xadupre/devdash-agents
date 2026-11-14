@@ -51,6 +51,7 @@ export interface SavedConversation {
   annotation?: SessionAnnotation;
   context?: string;
   generatedTokens?: number;
+  finalDiffSize?: number;
   draft: string;
   messages: ChatMessage[];
   postMortem?: PostMortem;
@@ -145,6 +146,10 @@ function parseConversation(value: unknown): SavedConversation {
       (typeof value.generatedTokens !== "number" ||
         !Number.isSafeInteger(value.generatedTokens) ||
         value.generatedTokens < 0)) ||
+    (value.finalDiffSize !== undefined &&
+      (typeof value.finalDiffSize !== "number" ||
+        !Number.isSafeInteger(value.finalDiffSize) ||
+        value.finalDiffSize < 0)) ||
     !Array.isArray(value.messages) ||
     !value.messages.every(isMessage)
   ) {
@@ -177,6 +182,9 @@ function parseConversation(value: unknown): SavedConversation {
       : {}),
     ...(value.generatedTokens !== undefined
       ? { generatedTokens: value.generatedTokens }
+      : {}),
+    ...(value.finalDiffSize !== undefined
+      ? { finalDiffSize: value.finalDiffSize }
       : {}),
     draft: value.draft,
     messages: value.messages.map((message) => ({
