@@ -332,11 +332,12 @@ export class LocalModelHost {
   private async shutdown(): Promise<void> {
     this.disposed = true;
     this.cancelIdleStop();
-    this.loadingController?.abort(
-      new DOMException("The local model host is closed.", "AbortError"),
-    );
     try {
-      await this.unload();
+      const unloading = this.unload();
+      this.loadingController?.abort(
+        new DOMException("The local model host is closed.", "AbortError"),
+      );
+      await unloading;
     } finally {
       await this.tail;
       this.sessions.clear();
