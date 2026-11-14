@@ -10,6 +10,8 @@ release = json.loads(
 html_theme = "pydata_sphinx_theme"
 html_logo = "../media/icon.svg"
 html_favicon = "../media/icon.svg"
+html_static_path = ["_static"]
+html_js_files = [("ci-status.js", {"defer": "defer"})]
 html_theme_options = {
     "github_url": "https://github.com/xadupre/devdash-agents",
     "logo": {"text": release},
