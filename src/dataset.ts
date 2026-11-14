@@ -28,10 +28,13 @@ export function datasetMetrics(conversation: SavedConversation) {
       .map((message) => Date.parse(message.timestamp ?? ""))
       .filter(Number.isFinite);
     if (requestTimestamps.length > 1) {
-      fallbackIntervals.push([
-        Math.min(...requestTimestamps),
-        Math.max(...requestTimestamps),
-      ]);
+      let first = requestTimestamps[0]!;
+      let last = first;
+      for (const timestamp of requestTimestamps) {
+        first = Math.min(first, timestamp);
+        last = Math.max(last, timestamp);
+      }
+      fallbackIntervals.push([first, last]);
     }
     request = [];
   };
@@ -48,7 +51,7 @@ export function datasetMetrics(conversation: SavedConversation) {
     } else if (request.length) request.push(message);
   }
   addFallbackInterval();
-  intervals.push(...fallbackIntervals);
+  for (const interval of fallbackIntervals) intervals.push(interval);
   intervals.sort((a, b) => a[0] - b[0]);
   const timestamps = messages
     .map((message) => Date.parse(message.timestamp ?? ""))

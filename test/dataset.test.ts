@@ -105,6 +105,30 @@ test("legacy request durations exclude idle gaps and combine with timed requests
   assert.equal(mixed.durationMs, 5000);
 });
 
+test("large legacy histories calculate duration without argument limits", () => {
+  const prompt = {
+    role: "user" as const,
+    content: "Prompt",
+    timestamp: "2026-11-14T09:00:00Z",
+  };
+  const answer = {
+    role: "assistant" as const,
+    content: "Answer",
+    timestamp: "2026-11-14T09:00:02Z",
+  };
+  const oneRequest = datasetMetrics({
+    draft: "",
+    messages: [prompt, ...Array.from({ length: 150_000 }, () => answer)],
+  });
+  assert.equal(oneRequest.durationMs, 2000);
+  const manyRequests = datasetMetrics({
+    draft: "",
+    messages: Array.from({ length: 150_000 }, () => [prompt, answer]).flat(),
+  });
+  assert.equal(manyRequests.durationMs, 2000);
+  assert.equal(manyRequests.promptCount, 150_000);
+});
+
 test("unsent placeholders do not split legacy request durations", () => {
   const { durationMs } = datasetMetrics({
     draft: "",

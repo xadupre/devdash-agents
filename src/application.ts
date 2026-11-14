@@ -855,6 +855,7 @@ export class AgentApplication {
     ) => Conversation,
     private readonly onChange: (streaming?: boolean) => void,
     saved?: SavedApplication,
+    private readonly collectDiff: typeof collectSessionDiff = collectSessionDiff,
   ) {
     if (saved && saved.root !== root) {
       throw new Error(
@@ -1240,6 +1241,9 @@ export class AgentApplication {
     const message: ChatMessage = {
       role: "user",
       content: answer,
+      ...(pending.owner.parentRecordId
+        ? { recordId: pending.owner.parentRecordId }
+        : {}),
     };
     const transcriptOwner = pending.owner.parent ?? pending.owner;
     transcriptOwner.messages.push(message);
@@ -1984,6 +1988,7 @@ export class AgentApplication {
     images = queuedMessage?.images,
   ): Promise<void> {
     const requestId = randomUUID();
+    const recordId = session.recordId;
     const conversation = session.conversation;
     if (!conversation) throw new Error("The repository session is not open.");
     this.recordModel(session, conversation.model);
@@ -2040,7 +2045,7 @@ export class AgentApplication {
       } finally {
         session.timing?.finish();
         session.timing = undefined;
-        await this.captureFinalDiffSize(session, requestId);
+        await this.captureFinalDiffSize(session, requestId, recordId);
         this.clearPendingRequests(id, session, requestId);
         this.onChange();
       }
@@ -2655,15 +2660,21 @@ export class AgentApplication {
   private async captureFinalDiffSize(
     session: RepositorySession,
     requestId?: string,
+    recordId = session.recordId,
   ): Promise<void> {
-    const recordId = session.recordId;
     try {
-      const { diff } = await collectSessionDiff(
+      const { diff } = await this.collectDiff(
         { repository: session.repository, conversation: session },
         AbortSignal.timeout(10_000),
       );
       if (session.recordId === recordId && session.activeSendId === requestId)
         session.finalDiffSize = Buffer.byteLength(diff, "utf8");
+      else if (session.recordId !== recordId) {
+        const archived = session.history.find(
+          (entry) => entry.recordId === recordId,
+        );
+        if (archived) archived.finalDiffSize = Buffer.byteLength(diff, "utf8");
+      }
     } catch {
       if (session.recordId === recordId && session.activeSendId === requestId)
         session.finalDiffSize = undefined;

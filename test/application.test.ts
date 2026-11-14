@@ -16,6 +16,7 @@ import { ApplicationStorage, type SavedApplication } from "../src/storage";
 import { testImage, waitForRequest } from "./helpers";
 import { describePermission } from "../src/presentation";
 import { runCommand } from "../src/github";
+import { collectSessionDiff } from "../src/session-export";
 import {
   generatePostMortem,
   type PostMortemProgress,
@@ -1416,6 +1417,7 @@ async function setup(
   t: TestContext,
   scenario = "conversation",
   timeoutMs = 5_000,
+  collectDiff?: typeof collectSessionDiff,
 ) {
   const root = await mkdtemp(join(tmpdir(), "devdash-agents-application-"));
   for (const name of ["alpha", "beta"]) {
@@ -1455,6 +1457,7 @@ async function setup(
         updates.emit("change");
       },
       saved,
+      collectDiff,
     );
     applications.push(application);
     return application;
@@ -1664,6 +1667,18 @@ test("late parallel usage belongs to its archived conversation after a failed ma
       .messages.some((message) => message.content === "Fail after approval"),
   );
   application.answerQuestion(question.id, "Targeted");
+  assert.equal(
+    application
+      .getState()
+      .messages.find((message) => message.content === "Targeted")?.recordId,
+    originalRecordId,
+  );
+  assert.equal(
+    application
+      .getDatasetSessions()
+      .find((session) => session.location === "current")?.promptCount,
+    0,
+  );
   await parallel;
   assert.equal(application.getState().repositories[0]?.generatedTokens, 0);
   assert.equal(
@@ -1695,6 +1710,114 @@ test("late parallel usage belongs to its archived conversation after a failed ma
       )?.toolCallCount,
     1,
   );
+});
+
+test("a completed diff probe updates its archived record without changing a replacement request", async (t) => {
+  let releaseProbe!: () => void;
+  let reportProbe!: () => void;
+  const probeReleased = new Promise<void>(
+    (resolve) => (releaseProbe = resolve),
+  );
+  const probeCompleted = new Promise<void>(
+    (resolve) => (reportProbe = resolve),
+  );
+  let first = true;
+  const collectDiff: typeof collectSessionDiff = async (...args) => {
+    const result = await collectSessionDiff(...args);
+    if (first) {
+      first = false;
+      reportProbe();
+      await probeReleased;
+    }
+    return result;
+  };
+  const { application, root, createApplication, waitForPermission } =
+    await setup(t, "permission-error", 5_000, collectDiff);
+  const alpha = join(root, "alpha");
+  const signal = AbortSignal.timeout(10_000);
+  const git = (args: string[]) => runCommand("git", args, alpha, signal);
+  await git(["init", "--quiet"]);
+  await writeFile(join(alpha, "tracked.txt"), "before\n");
+  await git(["add", "."]);
+  await git([
+    "-c",
+    "user.name=Example",
+    "-c",
+    "user.email=example@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--quiet",
+    "-m",
+    "initial",
+  ]);
+  await application.openSession(alpha);
+  const originalRecordId = application.getSnapshot().sessions[0]!.recordId;
+  await writeFile(join(alpha, "tracked.txt"), "old diff é\n");
+  const failed = assert.rejects(
+    application.send(alpha, "Fail after approval"),
+    /Main request failed/,
+  );
+  application.respondToPermission((await waitForPermission(alpha)).id, true);
+  try {
+    await probeCompleted;
+    const expectedSize = Buffer.byteLength(
+      await git([
+        "-c",
+        "core.fsmonitor=false",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--binary",
+        "HEAD",
+        "--",
+      ]),
+      "utf8",
+    );
+    await writeFile(join(alpha, "scenario"), "permission");
+    await application.openSession(alpha);
+    await writeFile(join(alpha, "tracked.txt"), "replacement diff\n");
+    const replacement = application.send(alpha, "Replacement request");
+    const permission = await waitForPermission(alpha);
+    releaseProbe();
+    await failed;
+    assert.equal(
+      application
+        .getDatasetSessions()
+        .find((entry) => entry.recordId === originalRecordId)?.finalDiffSize,
+      expectedSize,
+    );
+    const current = application
+      .getDatasetSessions()
+      .find((entry) => entry.location === "current")!;
+    assert.notEqual(current.recordId, originalRecordId);
+    assert.equal(current.finalDiffSize, undefined);
+    assert.equal(application.getState().repositories[0]?.status, "busy");
+    assert.ok(
+      application
+        .getState()
+        .permissions.some((entry) => entry.id === permission.id),
+    );
+    application.respondToPermission(permission.id, true);
+    await replacement;
+    const restored = createApplication(application.getSnapshot());
+    await restored.refresh();
+    assert.equal(
+      restored
+        .getDatasetSessions()
+        .find((entry) => entry.recordId === originalRecordId)?.finalDiffSize,
+      expectedSize,
+    );
+    assert.notEqual(
+      restored
+        .getDatasetSessions()
+        .find((entry) => entry.location === "current")?.finalDiffSize,
+      expectedSize,
+    );
+  } finally {
+    releaseProbe();
+  }
 });
 
 test("saving the local view retains an in-flight Copilot parallel session", async (t) => {
