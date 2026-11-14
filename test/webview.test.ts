@@ -1557,6 +1557,67 @@ test("right panel switches between repositories and live application logs", asyn
   assert.doesNotMatch(logs.textContent!, /Load failed/);
 });
 
+test("logs follow new entries only while the visible panel is at the bottom", async (t) => {
+  const { document, publish, state } = await setup(t);
+  const panel = document.querySelector<HTMLElement>("#repository-panel")!;
+  const logs = document.querySelector<HTMLElement>("#application-logs")!;
+  const logButton = document.querySelector<HTMLButtonElement>(
+    '#right-tabs [data-view="logs"]',
+  )!;
+  let scrollTop = 0;
+  const scrollHeight = () => 100 + logs.childElementCount * 100;
+  Object.defineProperties(panel, {
+    clientHeight: { value: 300 },
+    scrollHeight: { get: scrollHeight },
+    scrollTop: {
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = Math.max(0, Math.min(value, scrollHeight() - 300));
+      },
+    },
+  });
+  state.logs = [];
+  publish(state);
+  logButton.click();
+  const append = () => {
+    state.logs!.push({
+      id: state.logs!.length + 1,
+      timestamp: "2026-11-11T09:00:00.000Z",
+      repository: "alpha",
+      message: "New event",
+      level: "info",
+    });
+    publish(state);
+  };
+  append();
+  append();
+  assert.equal(panel.scrollTop, 0);
+  append();
+  assert.equal(panel.scrollTop, 100);
+  append();
+  assert.equal(panel.scrollTop, 200);
+
+  panel.scrollTop = 50;
+  append();
+  assert.equal(panel.scrollTop, 50);
+
+  panel.scrollTop = panel.scrollHeight - panel.clientHeight - 0.5;
+  append();
+  assert.equal(panel.scrollTop, 400);
+
+  state.logs.shift();
+  state.logs.push({ ...state.logs.at(-1)!, id: 100, message: "Latest event" });
+  publish(state);
+  assert.equal(panel.scrollTop, 400);
+  assert.match(logs.lastElementChild!.textContent!, /Latest event/);
+
+  document
+    .querySelector<HTMLButtonElement>('#right-tabs [data-view="repositories"]')!
+    .click();
+  append();
+  assert.equal(panel.scrollTop, 400);
+});
+
 test("the composer shows the active session model and free CPU/CUDA memory", async (t) => {
   const { document, dom, publish, state } = await setup(t);
   const model = document.querySelector<HTMLElement>("#session-model")!;

@@ -26,6 +26,7 @@ declare function acquireVsCodeApi(): {
   const sessionsView = element("sessions-view", HTMLElement);
   const datasetView = element("dataset-view", HTMLElement);
   const logView = element("log-view", HTMLElement);
+  const repositoryPanel = element("repository-panel", HTMLElement);
   const traceView = element("trace-view", HTMLElement);
   const traceEvent = element("trace-event", HTMLElement);
   const traceReasoning = element("trace-reasoning", HTMLElement);
@@ -2609,6 +2610,12 @@ declare function acquireVsCodeApi(): {
       lastLogId !== logsRenderedId ||
       !applicationLogs.hasChildNodes()
     ) {
+      const followLogs =
+        !logView.hidden &&
+        repositoryPanel.scrollHeight -
+          repositoryPanel.scrollTop -
+          repositoryPanel.clientHeight <=
+          1;
       logsRenderedId = lastLogId;
       logsRenderedRoot = next.root;
       const entries = logs.map((entry) => {
@@ -2624,6 +2631,7 @@ declare function acquireVsCodeApi(): {
       });
       applicationLogs.replaceChildren(...entries);
       if (!entries.length) applicationLogs.textContent = "No events yet.";
+      if (followLogs) repositoryPanel.scrollTop = repositoryPanel.scrollHeight;
     }
     if (
       pending &&
