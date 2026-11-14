@@ -413,8 +413,22 @@ export function activate(context: vscode.ExtensionContext): void {
         clearTimeout(saveTimer);
         clearTimeout(publishTimer);
         try {
-          await Promise.all([application.dispose(), github.dispose()]);
+          const results = await Promise.allSettled([
+            ...[...localHosts.values()].map((host) => host.dispose()),
+            application.dispose(),
+            github.dispose(),
+          ]);
+          const failures = results.filter(
+            (result) => result.status === "rejected",
+          );
+          if (failures.length)
+            throw new AggregateError(
+              failures.map((result) => result.reason),
+              "Application shutdown failed.",
+            );
         } finally {
+          localHosts.clear();
+          localModelInfo.clear();
           await storage.save(application.getSnapshot());
         }
       })());
@@ -867,6 +881,7 @@ export function activate(context: vscode.ExtensionContext): void {
       onClose?: (error: Error) => void,
       placement?: LocalPlacement,
     ): LocalWorker => {
+      lifetime.signal.throwIfAborted();
       // Some GenAI models (runtime_profiles) only load on CUDA device 0, so
       // each model process sees only its GPU.
       const cudaDevice =
@@ -910,6 +925,7 @@ export function activate(context: vscode.ExtensionContext): void {
       deviceId: number,
       modelInfo: LocalModelInfo,
     ): LocalModelHost => {
+      lifetime.signal.throwIfAborted();
       const desired = { provider, deviceId };
       if (launch.workerId) {
         const shared = [...localHosts.values()].find(
