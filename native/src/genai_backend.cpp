@@ -192,6 +192,7 @@ class GenaiBackend final : public Backend {
         if (chunk && *chunk) token(chunk);
       }
       result.cacheTokens = OgaGenerator_GetSequenceCount(cache.generator.value, 0);
+      result.contextTokens = result.cacheTokens;
       return result;
     } catch (...) {
       // A failed step may leave the KV cache inconsistent with its sequence.
@@ -347,7 +348,7 @@ class GenaiBackend final : public Backend {
         throw Error("insufficient_context", "Context could not be reduced");
       // Engine requests are scoped to one generation. The next turn prefills
       // the reduced history, without generating a hidden token here.
-      if (engine_.value) return {reduced, 0};
+      if (engine_.value) return {reduced, 0, input.size()};
       if (!caches_.count(session) && caches_.size() >= maxSessions)
         throw Error("too_many_sessions", "Release a session before starting another one");
       // GenAI v0.19 has no drop-prefix KV API. Destroy the old cache and
@@ -356,7 +357,7 @@ class GenaiBackend final : public Backend {
       auto& cache = caches_[session];
       prepare(cache, input.data(), input.size(), maxLength);
       abort();
-      return {reduced, OgaGenerator_GetSequenceCount(cache.generator.value, 0)};
+      return {reduced, OgaGenerator_GetSequenceCount(cache.generator.value, 0), input.size()};
     } catch (...) {
       caches_.erase(session);
       throw;
@@ -430,6 +431,7 @@ class GenaiBackend final : public Backend {
           check(OgaTurnUsageGetCachedPromptTokens(usage, &cached), "generation_failed");
           result.generatedTokens = generated;
           result.cachedTokens = cached;
+          result.contextTokens = count + generated;
           finished = true;
         }
       }
@@ -473,6 +475,7 @@ class GenaiBackend final : public Backend {
     const auto cache = caches_.find(session);
     if (cache != caches_.end() && cache->second.generator.value)
       result.cacheTokens = OgaGenerator_GetSequenceCount(cache->second.generator.value, 0);
+    result.contextTokens = result.cacheTokens;
     return result;
   }
   // Each request keeps the longest token prefix shared with the session's

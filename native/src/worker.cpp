@@ -384,6 +384,7 @@ void Worker::loop() {
         terminal = {{"id", r.id},
                     {"type", "reduced"},
                     {"messages", result.messages},
+                    {"contextTokens", result.contextTokens},
                     {"cacheTokens", result.cacheTokens}};
       } else {
         const auto token = [&](const std::string& chunk) {
@@ -396,6 +397,7 @@ void Worker::loop() {
                     {"type", "done"},
                     {"cachedTokens", result.cachedTokens},
                     {"generatedTokens", result.generatedTokens},
+                    {"contextTokens", result.contextTokens},
                     {"cacheTokens", result.cacheTokens}};
       }
     } catch (const Error& e) {

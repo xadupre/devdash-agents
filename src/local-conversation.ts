@@ -474,8 +474,9 @@ done`,
           this.emit({
             type: "session.usage_info",
             data: {
-              currentTokens: usage.cacheTokens,
-              tokenLimit: tokenLimit ?? usage.cacheTokens,
+              currentTokens: usage.contextTokens ?? usage.cacheTokens,
+              tokenLimit:
+                tokenLimit ?? usage.contextTokens ?? usage.cacheTokens,
               messagesLength: messages.length,
             },
           });
@@ -512,10 +513,10 @@ done`,
       this.emit({
         type: "session.usage_info",
         data: {
-          currentTokens: result.cacheTokens,
+          currentTokens: result.contextTokens ?? result.cacheTokens,
           tokenLimit: this.modelInfo
             ? Math.min(this.modelInfo.contextLength, 8192)
-            : result.cacheTokens,
+            : (result.contextTokens ?? result.cacheTokens),
           messagesLength: result.messages.length,
         },
       });

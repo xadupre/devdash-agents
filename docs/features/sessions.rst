@@ -78,6 +78,9 @@ calls into ONNX Runtime GenAI. Models configured for dynamic batching, including
 Qwen models with CPU embeddings, use GenAI Engine; other models use Generator.
 Engine releases each request after generation and manages a shared prefix cache
 instead of reserving a private KV cache for each idle conversation.
+Its private cached-token count is therefore zero, while logical context usage
+reports prompt plus generated tokens (including chat-template overhead).
+After reduction, context usage counts the tokenized replacement history.
 
 The **Sessions** panel lists loaded models and their open local sessions,
 including cached tokens and an approximate KV byte size, context usage and
@@ -135,7 +138,8 @@ Both actions target half the previous context's token count, including chat
 template overhead. If the system instructions alone prevent that reduction,
 the action reports an error. The displayed transcript and other sessions are
 unchanged; subsequent messages use only the reduced context. These controls are
-unavailable during inference or while the model is unloaded. They do not modify
+available when conversation history is retained, independently of private cache
+size, but unavailable during inference or while the model is unloaded. They do not modify
 Copilot's remotely managed context. With fixed-capacity shared KV buffers, fewer
 cached tokens do not necessarily reduce allocated GPU memory.
 For Engine models, reduction updates the history without retaining a private
