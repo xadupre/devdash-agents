@@ -58,6 +58,65 @@ Sources include ONNX/GenAI files or directories, Transformers checkpoints, Hub
 model IDs and Foundry catalogue IDs. Existing sessions retain their assignment.
 See [settings](docs/features/settings.rst).
 
+### Use a local model with Copilot's harness
+
+The worker can also run behind a local OpenAI-compatible inference service.
+Copilot then owns the conversation, instructions, tools and permission prompts;
+the service only generates model responses and never executes tools.
+This is opt-in and does not change existing Copilot or native local sessions.
+
+Build the native worker and prepare a GenAI model as described in the
+[development guide](docs/development.rst), then start the service from this checkout:
+
+```bash
+export DEVDASH_WORKER_API_KEY="$(node -p "require('node:crypto').randomBytes(32).toString('hex')")"
+npm run worker:serve -- --model /absolute/path/to/genai-model --provider cpu
+```
+
+The service prints its URL (default `http://127.0.0.1:8000/v1`).
+Use `--worker` for an external worker, `--provider cuda --device-id 0` for a GPU,
+`--port` to choose another port, and `--model-id` to change `devdash-local`.
+`--max-length` sets the total prompt-plus-output token limit (default 8192;
+choose a value within the model's context window). Stop with Ctrl+C.
+The model stays loaded until shutdown; request-specific KV caches are released.
+
+For example, configure a Copilot SDK session in a client process with the same
+`DEVDASH_WORKER_API_KEY` environment variable:
+
+```javascript
+const session = await client.createSession({
+  model: "devdash-local",
+  provider: {
+    type: "openai",
+    wireApi: "completions",
+    baseUrl: "http://127.0.0.1:8000/v1",
+    apiKey: process.env.DEVDASH_WORKER_API_KEY,
+  },
+  onPermissionRequest: yourPermissionHandler,
+});
+```
+
+The application's `CopilotOptions.provider` accepts this same configuration for
+programmatic use, preserving its normal harness and permission handling.
+The Settings UI does not yet configure custom providers. The URL must be reachable
+from the machine running Copilot; `127.0.0.1` refers to that machine.
+
+Supported endpoints are authenticated `GET /v1/models` and
+`POST /v1/chat/completions` (JSON or SSE). Text messages, assistant function calls
+and tool results are translated to the native model's chat template; function
+schemas are supplied as instructions and one call can be returned per response.
+Tool-capable responses are buffered until their call can be validated.
+Models must follow these instructions reliably; this does not add native
+function-calling training. Images, structured outputs, multiple completions and
+forced tool choices are unsupported. Generation uses the worker's defaults and
+the service's total token limit. OpenAI sampling, stop-sequence and output-token
+parameters are rejected rather than silently ignored; clients must omit them.
+Only one request runs at a time (others receive HTTP 429); requests time out after
+two minutes, and disconnecting cancels generation. There is no Copilot/cloud fallback.
+Authentication with the environment key is required on every endpoint, browser origins are rejected,
+and the listener is restricted to IPv4 loopback. Keep the key private and do not
+expose this development service through a public proxy.
+
 Release VSIX assets include a ready-to-run native worker: **Linux x64** and
 **Windows x64**, each with **CPU** or **CUDA** variants, and **macOS Apple Silicon**
 with CPU. Choose the variant matching the extension host, not necessarily your

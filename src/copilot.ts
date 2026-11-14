@@ -37,6 +37,7 @@ export interface CopilotOptions {
   cliPath: string;
   workingDirectory: string;
   model?: string;
+  provider?: SessionConfig["provider"];
   signal?: AbortSignal;
   timeoutMs?: number;
   onPermissionRequest?: PermissionHandler;
@@ -207,6 +208,7 @@ export function listCopilotSessions(
 export function copilotSessionConfig(options: CopilotOptions): SessionConfig {
   return {
     ...(options.model ? { model: options.model } : {}),
+    ...(options.provider ? { provider: options.provider } : {}),
     workingDirectory:
       options.remote?.workingDirectory ?? options.workingDirectory,
     trustWorkingDirectory: "session",

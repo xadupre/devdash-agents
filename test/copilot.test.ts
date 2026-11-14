@@ -83,6 +83,31 @@ test("session listing filters by repository root, hides remote sessions and sort
   await assertStopped(options);
 });
 
+test("custom local providers reach Copilot without disabling its harness", async (t) => {
+  const options = await setup(t);
+  const provider = {
+    type: "openai" as const,
+    wireApi: "completions" as const,
+    baseUrl: "http://127.0.0.1:8000/v1",
+  };
+  await askCopilot("Hello", { ...options, model: "devdash-local", provider });
+  const requests = (
+    await readFile(join(options.workingDirectory, "requests.jsonl"), "utf8")
+  )
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const create = requests.find(
+    (request) => request.method === "session.create",
+  );
+  assert.deepEqual(create.params.provider, provider);
+  assert.equal(create.params.model, "devdash-local");
+  assert.equal(create.params.enableSkills, true);
+  assert.equal(create.params.enableHostGitOperations, true);
+  assert.equal(create.params.availableTools, undefined);
+  await assertStopped(options);
+});
+
 test("an open conversation reads the updated timeout once for each operation", async (t) => {
   const options = await setup(t, "hang:session.sendAndWait");
   let timeoutMs = 10_000;
