@@ -308,6 +308,7 @@
     "test": "npm run compile && node --test dist/test/*.test.js",
     "coverage": "npm run compile && c8 --all --src dist/src --include=dist/src/** --reporter=lcov --reporter=text --reports-dir=build/coverage/typescript node --test dist/test/*.test.js",
     "smoke": "npm run compile && node dist/scripts/smoke.js",
+    "worker:serve": "npm run compile && node dist/scripts/worker-service.js",
     "docs:screenshots": "npm run compile && node dist/scripts/docs-screenshots.js",
     "check": "npm run format:check && npm run lint && npm test",
     "vscode:prepublish": "npm run compile",
