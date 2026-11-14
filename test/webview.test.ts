@@ -5177,6 +5177,221 @@ test("a worker save cannot overwrite a machine save still in progress", async (t
   assert.equal(workerSave.configuration.workers[0]!.id, "qwen");
 });
 
+for (const editor of ["machine", "worker"] as const) {
+  for (const newerEdits of [false, true]) {
+    test(`${editor} create, edit and delete reconcile the editor with newer edits=${newerEdits}`, async (t) => {
+      const { dom, document, posted } = await setup(t);
+      const send = settingsSender(dom);
+      send({
+        execution: {
+          machines: [
+            {
+              id: "local",
+              name: "This computer",
+              command: "",
+              repositoriesPath: "/projects",
+              modelsPath: "/models",
+              workerPath: "worker",
+              cliPath: "copilot",
+            },
+          ],
+          workers: [],
+        },
+      });
+      const entry = document.querySelector<HTMLSelectElement>(
+        `#${editor}-entry`,
+      )!;
+      const id = document.querySelector<HTMLInputElement>(`#${editor}-id`)!;
+      const name = document.querySelector<HTMLInputElement>(`#${editor}-name`)!;
+      const form = document.querySelector<HTMLFormElement>(
+        `#${editor}-configuration`,
+      )!;
+      const remove = document.querySelector<HTMLButtonElement>(
+        `#delete-${editor}`,
+      )!;
+      const other = editor === "machine" ? "worker" : "machine";
+      const otherName = document.querySelector<HTMLInputElement>(
+        `#${other}-name`,
+      )!;
+      const status = document.querySelector(
+        `#${editor === "machine" ? "machine" : "execution"}-configuration-status`,
+      )!;
+      entry.value = "";
+      entry.dispatchEvent(new dom.window.Event("change"));
+      id.value = "new-entry";
+      name.value = "New entry";
+      if (editor === "machine") {
+        document.querySelector<HTMLInputElement>("#machine-command")!.value =
+          "ssh host";
+        document.querySelector<HTMLInputElement>(
+          "#machine-repositories",
+        )!.value = "/remote/projects";
+        document.querySelector<HTMLInputElement>("#machine-models")!.value =
+          "/remote/models";
+      } else {
+        const kind = document.querySelector<HTMLSelectElement>("#worker-kind")!;
+        kind.value = "model-id";
+        kind.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+        document.querySelector<HTMLInputElement>("#worker-source")!.value =
+          "Qwen/Qwen3-0.6B";
+        document.querySelector<HTMLSelectElement>("#worker-provider")!.value =
+          "cuda";
+        document.querySelector<HTMLInputElement>("#worker-device")!.value = "2";
+      }
+
+      for (const operation of ["create", "edit", "delete"] as const) {
+        if (operation === "delete") remove.click();
+        else form.requestSubmit();
+        const save = posted.at(-1)!;
+        if (save.type !== "execution-configuration") assert.fail();
+        assert.deepEqual(parseApplicationMessage(save), save);
+        if (operation !== "delete")
+          assert.equal(
+            save.configuration[
+              editor === "machine" ? "machines" : "workers"
+            ].filter((entry) => entry.id === "new-entry").length,
+            1,
+          );
+        if (newerEdits) {
+          name.value = `Unsaved ${operation}`;
+          name.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+        }
+        otherName.value = `Other draft during ${operation}`;
+        otherName.dispatchEvent(
+          new dom.window.Event("input", { bubbles: true }),
+        );
+        // Settings can arrive before the save acknowledgement.
+        send({ execution: save.configuration });
+        acknowledgeExecutionSave(dom, save);
+        assert.equal(otherName.value, `Other draft during ${operation}`);
+        assert.match(status.textContent!, /newer edits are unsaved/);
+        assert.equal(entry.value, operation === "delete" ? "" : "new-entry");
+        assert.equal(id.readOnly, operation !== "delete");
+        assert.equal(remove.disabled, operation === "delete");
+        assert.equal(
+          name.value,
+          newerEdits
+            ? `Unsaved ${operation}`
+            : operation === "delete"
+              ? ""
+              : "New entry",
+        );
+        if (operation === "delete") {
+          assert.equal(id.value, newerEdits ? "new-entry" : "");
+          if (editor === "machine") {
+            assert.equal(
+              document.querySelector<HTMLInputElement>("#machine-command")!
+                .readOnly,
+              false,
+            );
+            if (!newerEdits) {
+              assert.equal(
+                document.querySelector<HTMLInputElement>("#machine-worker")!
+                  .value,
+                "devdash-genai-worker",
+              );
+              assert.equal(
+                document.querySelector<HTMLInputElement>("#machine-copilot")!
+                  .value,
+                "copilot",
+              );
+            }
+          } else if (!newerEdits) {
+            assert.equal(
+              document.querySelector<HTMLSelectElement>("#worker-machine")!
+                .value,
+              "local",
+            );
+            assert.equal(
+              document.querySelector<HTMLInputElement>("#worker-source")!.value,
+              "",
+            );
+            assert.equal(
+              document.querySelector<HTMLInputElement>("#worker-device")!.value,
+              "0",
+            );
+            assert.equal(
+              document.querySelector<HTMLSelectElement>("#worker-kind")!.value,
+              "copilot",
+            );
+            assert.equal(
+              document.querySelector<HTMLSelectElement>("#worker-provider")!
+                .value,
+              "cpu",
+            );
+          }
+        } else {
+          assert.equal(id.value, "new-entry");
+          if (editor === "machine")
+            assert.equal(
+              document.querySelector<HTMLButtonElement>(
+                "#add-machine-copilot-worker",
+              )!.disabled,
+              false,
+            );
+          name.value = "New entry";
+        }
+      }
+    });
+  }
+
+  test(`${editor} creation preserves a different identifier typed while saving`, async (t) => {
+    const { dom, document, posted } = await setup(t);
+    settingsSender(dom)({
+      execution: {
+        machines: [
+          {
+            id: "local",
+            name: "This computer",
+            command: "",
+            repositoriesPath: "/projects",
+            modelsPath: "/models",
+            workerPath: "worker",
+            cliPath: "copilot",
+          },
+        ],
+        workers: [],
+      },
+    });
+    const entry = document.querySelector<HTMLSelectElement>(
+      `#${editor}-entry`,
+    )!;
+    entry.value = "";
+    entry.dispatchEvent(new dom.window.Event("change"));
+    const id = document.querySelector<HTMLInputElement>(`#${editor}-id`)!;
+    id.value = "first";
+    document.querySelector<HTMLInputElement>(`#${editor}-name`)!.value =
+      "First";
+    if (editor === "machine") {
+      document.querySelector<HTMLInputElement>("#machine-repositories")!.value =
+        "/projects";
+      document.querySelector<HTMLInputElement>("#machine-models")!.value =
+        "/models";
+    }
+    const form = document.querySelector<HTMLFormElement>(
+      `#${editor}-configuration`,
+    )!;
+    form.requestSubmit();
+    const first = posted.at(-1)!;
+    if (first.type !== "execution-configuration") assert.fail();
+    id.value = "second";
+    id.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    acknowledgeExecutionSave(dom, first);
+    assert.equal(entry.value, "");
+    assert.equal(id.value, "second");
+    assert.equal(id.readOnly, false);
+    form.requestSubmit();
+    const second = posted.at(-1)!;
+    if (second.type !== "execution-configuration") assert.fail();
+    assert.deepEqual(
+      second.configuration[editor === "machine" ? "machines" : "workers"]
+        .filter((entry) => entry.id !== "local")
+        .map((entry) => entry.id),
+      ["first", "second"],
+    );
+  });
+}
+
 test("machine and worker forms preserve independent paths, repeated hosts and one model/device", async (t) => {
   const { dom, document, posted } = await setup(t);
   const send = settingsSender(dom);
@@ -5403,14 +5618,30 @@ test("a saved remote machine gets a one-click Copilot worker and explained place
     name: "Copilot @ GPU",
     machineId: "gpu",
   });
+  acknowledgeExecutionSave(dom, saved);
+  const workerEntry =
+    document.querySelector<HTMLSelectElement>("#worker-entry")!;
+  const workerId = document.querySelector<HTMLInputElement>("#worker-id")!;
+  assert.equal(workerEntry.value, "copilot-gpu-2");
+  assert.equal(workerId.value, "copilot-gpu-2");
+  assert.equal(workerId.readOnly, true);
   const workerMachine =
     document.querySelector<HTMLSelectElement>("#worker-machine")!;
-  workerMachine.value = "gpu";
-  workerMachine.dispatchEvent(new dom.window.Event("change"));
+  assert.equal(workerMachine.value, "gpu");
   assert.match(
     document.querySelector("#worker-kind-hint")!.textContent!,
     /Copilot CLI \(\/opt\/copilot\) runs on GPU \(remote\)/,
   );
+  add.click();
+  const nextSave = posted.at(-1)!;
+  if (nextSave.type !== "execution-configuration") assert.fail();
+  const workerName = document.querySelector<HTMLInputElement>("#worker-name")!;
+  workerName.value = "Keep this edit";
+  workerName.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  acknowledgeExecutionSave(dom, nextSave);
+  assert.equal(workerEntry.value, "copilot-gpu-2");
+  assert.equal(workerId.value, "copilot-gpu-2");
+  assert.equal(workerName.value, "Keep this edit");
 });
 
 test("the worker table lists running workers and stops idle ones on demand", async (t) => {

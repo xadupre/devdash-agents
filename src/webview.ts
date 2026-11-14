@@ -1030,8 +1030,15 @@ declare function acquireVsCodeApi(): {
     "idle" | "saving" | "saved" | "dirty" | "error" = "idle";
   let executionEditVersion = 0;
   let savingExecutionEditVersion = 0;
+  const editorEditVersions = { machine: 0, worker: 0 };
   let pendingExecutionSave:
-    | { requestId: string; label: "Machine settings" | "Worker settings" }
+    | {
+        requestId: string;
+        editor: "machine" | "worker";
+        id: string;
+        operation: "save" | "delete";
+        editVersion: number;
+      }
     | undefined;
   const setExecutionConfigurationStatus = (
     message: string,
@@ -1066,11 +1073,19 @@ declare function acquireVsCodeApi(): {
   };
   const saveExecutionConfiguration = (
     configuration: ExecutionConfiguration,
-    label: "Machine settings" | "Worker settings",
+    editor: "machine" | "worker",
+    id: string,
+    operation: "save" | "delete" = "save",
   ): void => {
     if (executionConfigurationState === "saving") return;
     const requestId = crypto.randomUUID();
-    pendingExecutionSave = { requestId, label };
+    pendingExecutionSave = {
+      requestId,
+      editor,
+      id,
+      operation,
+      editVersion: editorEditVersions[editor],
+    };
     savingExecutionEditVersion = executionEditVersion;
     setExecutionConfigurationStatus("Saving machines and workers...", "saving");
     updateExecutionConfigurationControls();
@@ -1103,14 +1118,20 @@ declare function acquireVsCodeApi(): {
   };
   const noteMachineEdit = (): void => {
     machineEditorTouched = true;
+    editorEditVersions.machine++;
+    noteExecutionEdit();
+  };
+  const noteWorkerEdit = (): void => {
+    editorEditVersions.worker++;
     noteExecutionEdit();
   };
   machineForm.addEventListener("input", noteMachineEdit);
   machineForm.addEventListener("change", noteMachineEdit);
-  workerForm.addEventListener("input", noteExecutionEdit);
-  workerForm.addEventListener("change", noteExecutionEdit);
+  workerForm.addEventListener("input", noteWorkerEdit);
+  workerForm.addEventListener("change", noteWorkerEdit);
   machineEntry.addEventListener("change", () => {
     machineEditorTouched = true;
+    editorEditVersions.machine++;
     fillMachineForm();
     if (executionConfigurationState === "error")
       setExecutionConfigurationStatus("");
@@ -1155,7 +1176,8 @@ declare function acquireVsCodeApi(): {
           machine,
         ],
       },
-      "Machine settings",
+      "machine",
+      machine.id,
     );
   });
   deleteMachine.addEventListener("click", () => {
@@ -1179,7 +1201,9 @@ declare function acquireVsCodeApi(): {
           (entry) => entry.id !== machineEntry.value,
         ),
       },
-      "Machine settings",
+      "machine",
+      machineEntry.value,
+      "delete",
     );
   });
   const workerFoundryDevice = (): "cpu" | "gpu" =>
@@ -1272,7 +1296,8 @@ declare function acquireVsCodeApi(): {
           },
         ],
       },
-      "Worker settings",
+      "worker",
+      id,
     );
   });
   const workerKindHint = element("worker-kind-hint", HTMLElement);
@@ -1308,7 +1333,7 @@ declare function acquireVsCodeApi(): {
   };
   workerKind.addEventListener("change", updateWorkerKind);
   workerMachine.addEventListener("change", updateWorkerKind);
-  workerEntry.addEventListener("change", () => {
+  const fillWorkerForm = (): void => {
     const worker = settingsState?.execution?.workers.find(
       (entry) => entry.id === workerEntry.value,
     );
@@ -1323,6 +1348,10 @@ declare function acquireVsCodeApi(): {
     workerDevice.value = String(worker?.deviceId ?? 0);
     updateExecutionConfigurationControls();
     updateWorkerKind();
+  };
+  workerEntry.addEventListener("change", () => {
+    editorEditVersions.worker++;
+    fillWorkerForm();
     if (executionConfigurationState === "error")
       setExecutionConfigurationStatus("");
   });
@@ -1361,7 +1390,8 @@ declare function acquireVsCodeApi(): {
           worker,
         ],
       },
-      "Worker settings",
+      "worker",
+      worker.id,
     );
   });
   deleteWorker.addEventListener("click", () => {
@@ -1375,7 +1405,9 @@ declare function acquireVsCodeApi(): {
           (entry) => entry.id !== workerEntry.value,
         ),
       },
-      "Worker settings",
+      "worker",
+      workerEntry.value,
+      "delete",
     );
   });
   const renderExecutionConfiguration = (): void => {
@@ -3913,7 +3945,9 @@ declare function acquireVsCodeApi(): {
           event.data.requestId !== pendingExecutionSave?.requestId
         )
           return;
-        const label = pendingExecutionSave.label;
+        const saved = pendingExecutionSave;
+        const label =
+          saved.editor === "machine" ? "Machine settings" : "Worker settings";
         pendingExecutionSave = undefined;
         if (settingsState) {
           settingsState = {
@@ -3921,6 +3955,19 @@ declare function acquireVsCodeApi(): {
             execution: event.data.configuration,
           };
           renderExecutionConfiguration();
+          const entry = saved.editor === "machine" ? machineEntry : workerEntry;
+          const id = saved.editor === "machine" ? machineFields.id : workerId;
+          const newerEditorEdits =
+            editorEditVersions[saved.editor] !== saved.editVersion;
+          if (!newerEditorEdits) {
+            entry.value = saved.operation === "delete" ? "" : saved.id;
+            if (saved.editor === "machine") fillMachineForm();
+            else fillWorkerForm();
+          } else if (id.value.trim() === saved.id) {
+            // Reconcile identity without replacing newer field values.
+            entry.value = saved.operation === "delete" ? "" : saved.id;
+            id.readOnly = saved.operation !== "delete";
+          }
         }
         const newerEdits = executionEditVersion !== savingExecutionEditVersion;
         setExecutionConfigurationStatus(
