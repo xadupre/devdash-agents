@@ -26,8 +26,8 @@ Read an issue or pull request
 Click an issue or pull request title to read its description and discussion
 comments in the main panel. Markdown is rendered locally; comments are loaded
 across all pages. This is a local Markdown view, not an embedded GitHub website:
-PR diffs, submitted reviews, inline review threads and editing existing content
-remain on GitHub.
+submitted reviews, inline review threads and editing existing content remain on
+GitHub.
 It does not send anything to Copilot or change your conversation or draft.
 
 Use **Back to conversation** to return to the chat, **Refresh** to reload the
@@ -41,6 +41,30 @@ issue or PR in the browser. Links inside the reader, comment permalinks and
 commits also open externally.
 Changing repositories closes the reader and cancels its pending read.
 Authentication and API failures appear in the reader, where you can retry.
+
+Review a pull request diff
+--------------------------
+
+In a pull request reader, **Review PR diff** opens the changed files side by
+side. It compares GitHub's merge base with the PR head, even when that branch
+is not checked out locally or belongs to a fork. The commit IDs are displayed;
+**Refresh** loads a new snapshot if the PR changes.
+
+Select a file in the resizable tree and use the overview bar to see and navigate
+changes across the entire file. The bar shows removed lines on the left, added
+lines on the right and the currently visible portions; click it or use the
+keyboard to scroll. **Previous change** and **Next change** move between
+changes. Click a line to add a commit-pinned GitHub link to the review notes.
+With a session open, **Send notes to agent** sends the notes and PR identity to
+that session; it does not publish a GitHub review or comment.
+**Back to pull request** returns to the discussion.
+Notes stay with the PR in this window while you open or switch sessions.
+
+Reading the diff uses authenticated ``gh`` and does not require an open session.
+Renames retain both paths. Binary files are listed without a text comparison;
+submodules cannot be displayed as text. GitHub's file-list limit is 3,000
+files. Files exceeding 10,000 lines or 4 MiB of diff output are reported
+instead of being truncated.
 
 Publish a comment
 -----------------

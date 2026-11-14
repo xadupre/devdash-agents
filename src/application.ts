@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { CopilotRecoveryError, type Conversation } from "./conversation";
 import { buildPrompt, MAX_PROMPT_LENGTH, MAX_SELECTION_LENGTH } from "./prompt";
 import { discoverRepositories, type Repository } from "./repositories";
+import { isDiffPath } from "./diff";
 import { isExternalUrl } from "./links";
 import {
   isImageDataUrl,
@@ -13,6 +14,7 @@ import { describeTool } from "./presentation";
 import { ExecutionTiming, type StepTiming } from "./timing";
 import {
   isGitHubDiscussionUrl,
+  isGitHubPullRequestUrl,
   isGitHubCommentBody,
   isGitHubSection,
   type GitHubSection,
@@ -322,6 +324,23 @@ export type ApplicationMessage =
       annotation: SessionAnnotation | null;
     }
   | { type: "export-dataset-session"; id: string; recordId: string }
+  | {
+      type: "local-diff";
+      id: string;
+      view: SessionView;
+      requestId: string;
+      path?: string;
+      commit?: string;
+    }
+  | {
+      type: "pull-diff";
+      id: string;
+      view: SessionView;
+      url: string;
+      requestId: string;
+      path?: string;
+    }
+  | { type: "close-diff"; id: string; view: SessionView }
   | { type: "github"; id: string; section: GitHubSection; cursor?: string }
   | { type: "github-discussion"; id: string; url: string }
   | {
@@ -639,6 +658,61 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
   }
   if (!("id" in value) || typeof value.id !== "string") {
     throw new Error("The application message must identify a repository.");
+  }
+  if (
+    value.type === "close-diff" &&
+    "view" in value &&
+    isSessionView(value.view)
+  )
+    return { type: value.type, id: value.id, view: value.view };
+  if (value.type === "local-diff") {
+    const requestId = "requestId" in value ? value.requestId : undefined;
+    const view = "view" in value ? value.view : undefined;
+    const path = "path" in value ? value.path : undefined;
+    const commit = "commit" in value ? value.commit : undefined;
+    if (
+      typeof requestId !== "string" ||
+      !/^[\w-]{1,100}$/.test(requestId) ||
+      !isSessionView(view) ||
+      !(
+        (path === undefined && commit === undefined) ||
+        (isDiffPath(path) &&
+          typeof commit === "string" &&
+          /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(commit))
+      )
+    )
+      throw new Error("Invalid local diff request.");
+    return {
+      type: "local-diff",
+      id: value.id,
+      view,
+      requestId,
+      ...(typeof path === "string" && typeof commit === "string"
+        ? { path, commit }
+        : {}),
+    };
+  }
+  if (value.type === "pull-diff") {
+    const requestId = "requestId" in value ? value.requestId : undefined;
+    const view = "view" in value ? value.view : undefined;
+    const path = "path" in value ? value.path : undefined;
+    const url = "url" in value ? value.url : undefined;
+    if (
+      typeof requestId !== "string" ||
+      !/^[\w-]{1,100}$/.test(requestId) ||
+      !isSessionView(view) ||
+      !isGitHubPullRequestUrl(url) ||
+      (path !== undefined && !isDiffPath(path))
+    )
+      throw new Error("Invalid pull request diff request.");
+    return {
+      type: "pull-diff",
+      id: value.id,
+      view,
+      url,
+      requestId,
+      ...(typeof path === "string" ? { path } : {}),
+    };
   }
   if (
     (value.type === "annotate-session" ||

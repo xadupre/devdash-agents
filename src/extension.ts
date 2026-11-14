@@ -16,6 +16,7 @@ import {
 import { ApplicationStorage } from "./storage";
 import { permissionHandler } from "./permissions";
 import { GitHubPanel } from "./github-panel";
+import { GitHubRepository, type PullRequestDiffSnapshot } from "./github";
 import {
   askCopilot,
   listCopilotModels,
@@ -25,6 +26,7 @@ import {
 } from "./copilot";
 import { generatePostMortem, postMortemResponseSchema } from "./postmortem";
 import { exportSessionJson } from "./session-export";
+import { listLocalDiff, loadLocalDiffFile } from "./local-diff";
 import { inspectLocalModel, type LocalModelInfo } from "./local-model";
 import { isTransformersModelId, prepareLocalModel } from "./local-model-source";
 import {
@@ -1447,6 +1449,17 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       },
     );
+    let diffRequest:
+      { id: string; view: string; controller: AbortController } | undefined;
+    let pullDiffSnapshot:
+      | {
+          id: string;
+          view: string;
+          url: string;
+          source: GitHubRepository;
+          snapshot: PullRequestDiffSnapshot;
+        }
+      | undefined;
     const messageSubscription = panel.webview.onDidReceiveMessage(
       async (value: unknown) => {
         let repositoryId: string | undefined;
@@ -1862,6 +1875,7 @@ export function activate(context: vscode.ExtensionContext): void {
                     if (panel)
                       void panel.webview.postMessage({
                         ...status,
+                        kind: discussion?.kind,
                         html: discussion
                           ? renderGitHubDiscussion(discussion)
                           : undefined,
@@ -1873,6 +1887,123 @@ export function activate(context: vscode.ExtensionContext): void {
               }
               break;
             }
+            case "local-diff":
+            case "pull-diff": {
+              diffRequest?.controller.abort();
+              const controller = new AbortController();
+              diffRequest = {
+                id: message.id,
+                view: message.view,
+                controller,
+              };
+              try {
+                const repository = application
+                  .getState()
+                  .repositories.find((entry) => entry.id === message.id);
+                if (!repository) throw new Error("Unknown repository.");
+                const signal = AbortSignal.any([
+                  controller.signal,
+                  AbortSignal.timeout(120_000),
+                ]);
+                let result;
+                if (message.type === "pull-diff") {
+                  if (message.path !== undefined) {
+                    if (
+                      !pullDiffSnapshot ||
+                      pullDiffSnapshot.id !== message.id ||
+                      pullDiffSnapshot.view !== message.view ||
+                      pullDiffSnapshot.url !== message.url
+                    )
+                      throw new Error(
+                        "The pull request diff snapshot is no longer available. Refresh and try again.",
+                      );
+                    result = {
+                      file: await pullDiffSnapshot.source.loadPullRequestDiffFile(
+                        pullDiffSnapshot.snapshot,
+                        message.path,
+                        signal,
+                      ),
+                    };
+                  } else {
+                    pullDiffSnapshot = undefined;
+                    const source = new GitHubRepository(repository.path);
+                    const snapshot = await source.loadPullRequestDiff(
+                      message.url,
+                      signal,
+                    );
+                    signal.throwIfAborted();
+                    pullDiffSnapshot = {
+                      id: message.id,
+                      view: message.view,
+                      url: message.url,
+                      source,
+                      snapshot,
+                    };
+                    result = { list: snapshot.list };
+                  }
+                } else {
+                  pullDiffSnapshot = undefined;
+                  const machine = application.getAssignment(
+                    message.id,
+                    message.view,
+                  )?.executionMachine;
+                  result =
+                    message.path !== undefined && message.commit !== undefined
+                      ? {
+                          file: await loadLocalDiffFile(
+                            repository.path,
+                            machine,
+                            message.commit,
+                            message.path,
+                            signal,
+                          ),
+                        }
+                      : {
+                          list: await listLocalDiff(
+                            repository.path,
+                            machine,
+                            signal,
+                          ),
+                        };
+                }
+                await panel?.webview.postMessage({
+                  type: message.type,
+                  id: message.id,
+                  view: message.view,
+                  ...(message.type === "pull-diff" ? { url: message.url } : {}),
+                  requestId: message.requestId,
+                  ...result,
+                });
+              } catch (error) {
+                if (!controller.signal.aborted)
+                  await panel?.webview.postMessage({
+                    type: message.type,
+                    id: message.id,
+                    view: message.view,
+                    ...(message.type === "pull-diff"
+                      ? { url: message.url }
+                      : {}),
+                    requestId: message.requestId,
+                    error: report(error),
+                  });
+              } finally {
+                if (diffRequest?.controller === controller)
+                  diffRequest = undefined;
+              }
+              break;
+            }
+            case "close-diff":
+              if (
+                diffRequest?.id === message.id &&
+                diffRequest.view === message.view
+              )
+                diffRequest.controller.abort();
+              if (
+                pullDiffSnapshot?.id === message.id &&
+                pullDiffSnapshot.view === message.view
+              )
+                pullDiffSnapshot = undefined;
+              break;
             case "select":
               await application.select(message.id);
               break;
@@ -2300,6 +2431,8 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     panel.onDidDispose(() => {
       panel = undefined;
+      diffRequest?.controller.abort();
+      pullDiffSnapshot = undefined;
       for (const resolve of assignmentRequests.values()) resolve(undefined);
       clearInterval(memoryTimer);
       visibilitySubscription.dispose();

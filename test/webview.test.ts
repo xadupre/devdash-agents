@@ -26,6 +26,7 @@ import type {
 import { testImage } from "./helpers";
 import type { SettingsState } from "../src/settings";
 import { MAX_IMAGE_BYTES } from "../src/images";
+import type { DiffChange, DiffFile } from "../src/diff";
 
 async function setup(t: TestContext) {
   const posted: ApplicationMessage[] = [];
@@ -134,6 +135,7 @@ async function setupDiscussion(t: TestContext, url: string) {
       id: "alpha",
       url: target,
       status: "ready",
+      kind: discussion.kind,
       html: renderGitHubDiscussion(discussion),
     };
     application.publishGitHub(ready);
@@ -142,6 +144,815 @@ async function setupDiscussion(t: TestContext, url: string) {
   const ready = open(url);
   return { ...application, open, ready };
 }
+
+test("the session diff shows unaligned code, links changes and sends review notes", async (t) => {
+  const { dom, document, posted, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  const repository = state.repositories[0]!;
+  repository.status = "ready";
+  repository.view = "copilot:one";
+  repository.sessions = [
+    {
+      view: "copilot:one",
+      backend: "copilot",
+      status: "ready",
+      open: true,
+      generation: 1,
+    },
+  ];
+  publish(state);
+  const question = document.querySelector<HTMLTextAreaElement>("#question")!;
+  question.value = "Please review";
+  question.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  document.querySelector<HTMLButtonElement>("#open-local-diff")!.click();
+  const listRequest = posted.at(-1)!;
+  assert.equal(listRequest.type, "local-diff");
+  if (listRequest.type !== "local-diff") assert.fail();
+  assert.equal(listRequest.view, "copilot:one");
+  assert.deepEqual(parseApplicationMessage(listRequest), listRequest);
+  const update = (data: object): void => {
+    dom.window.dispatchEvent(new dom.window.MessageEvent("message", { data }));
+  };
+  const commit = "a".repeat(40);
+  update({
+    type: "local-diff",
+    id: "alpha",
+    view: "copilot:one",
+    requestId: listRequest.requestId,
+    list: {
+      commit,
+      machine: "GPU",
+      repositoryPath: "/remote/alpha",
+      files: [{ path: "src/example (1).ts", status: "M" }],
+    },
+  });
+  assert.match(
+    document.querySelector("#diff-status")!.textContent!,
+    /Loading file/,
+  );
+  assert.equal(
+    document.querySelector("#diff-tree summary")!.textContent,
+    "src",
+  );
+  const fileRequest = posted.at(-1)!;
+  if (fileRequest.type !== "local-diff") assert.fail();
+  assert.equal(fileRequest.path, "src/example (1).ts");
+  assert.equal(fileRequest.commit, commit);
+  update({
+    type: "local-diff",
+    id: "alpha",
+    view: "copilot:one",
+    requestId: listRequest.requestId,
+    error: "stale response",
+  });
+  assert.equal(
+    document.querySelector<HTMLElement>("#diff-error")!.hidden,
+    true,
+  );
+  update({
+    type: "local-diff",
+    id: "alpha",
+    view: "copilot:one",
+    requestId: fileRequest.requestId,
+    file: {
+      path: "src/example (1).ts",
+      status: "M",
+      oldLines: ["a", "old", "c", "d", "e"],
+      newLines: ["a", "new", "inserted", "c", "d", "E"],
+      changes: [
+        { oldStart: 1, oldCount: 1, newStart: 1, newCount: 2 },
+        { oldStart: 4, oldCount: 1, newStart: 5, newCount: 1 },
+      ],
+      binary: false,
+      oldNoFinalNewline: false,
+      newNoFinalNewline: false,
+    },
+  });
+  const old = document.querySelector<HTMLElement>("#diff-old")!;
+  const current = document.querySelector<HTMLElement>("#diff-new")!;
+  assert.equal(old.querySelectorAll(".diff-line").length, 5);
+  assert.equal(current.querySelectorAll(".diff-line").length, 6);
+  assert.equal(old.querySelectorAll(".removed").length, 2);
+  assert.equal(current.querySelectorAll(".added").length, 3);
+  assert.equal(
+    current.querySelectorAll(".diff-line span")[2]!.textContent,
+    "inserted",
+  );
+  Object.defineProperty(
+    document.querySelector("#diff-split")!,
+    "clientHeight",
+    { value: 100 },
+  );
+  old.dispatchEvent(new dom.window.Event("scroll"));
+  assert.equal(document.querySelectorAll("#diff-links path").length, 2);
+  old.scrollTop = 80;
+  old.dispatchEvent(new dom.window.Event("scroll"));
+  assert.equal(current.scrollTop, 100);
+  document.querySelector<HTMLButtonElement>("#diff-next")!.click();
+  assert.equal(old.scrollTop, 80);
+  assert.equal(current.scrollTop, 100);
+  assert.match(
+    document.querySelector("#diff-file-status")!.textContent!,
+    /Change 2 of 2/,
+  );
+  document.querySelector<HTMLButtonElement>("#diff-previous")!.click();
+  assert.equal(old.scrollTop, 20);
+  assert.equal(current.scrollTop, 20);
+  assert.match(
+    document.querySelector("#diff-file-status")!.textContent!,
+    /Change 1 of 2/,
+  );
+  const divider = document.querySelector<HTMLElement>("#diff-divider")!;
+  divider.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", { key: "ArrowRight" }),
+  );
+  assert.equal(divider.getAttribute("aria-valuenow"), "52");
+
+  (old.querySelectorAll(".diff-line span")[1] as HTMLElement).click();
+  (current.querySelectorAll(".diff-line span")[2] as HTMLElement).click();
+  const notes = document.querySelector<HTMLTextAreaElement>("#diff-notes")!;
+  assert.match(
+    notes.value,
+    /\[src\/example \(1\)\.ts:2\]\(src\/example%20%281%29\.ts#L2\) \(HEAD a{12}\)/,
+  );
+  assert.match(
+    notes.value,
+    /\[src\/example \(1\)\.ts:3\]\(src\/example%20%281%29\.ts#L3\) \(working tree\)/,
+  );
+  notes.value += "Please check this.";
+  notes.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  document.querySelector<HTMLButtonElement>("#diff-send")!.click();
+  const sent = posted.filter((message) => message.type === "send").at(-1);
+  assert.ok(sent);
+  if (sent.type !== "send") assert.fail();
+  assert.equal(sent.id, "alpha");
+  assert.equal(sent.view, "copilot:one");
+  assert.match(sent.question, /^Please review\n\n/);
+  assert.match(sent.question, /Please check this\./);
+  assert.equal(
+    document.querySelector<HTMLElement>("#local-diff-view")!.hidden,
+    true,
+  );
+  dom.window.dispatchEvent(
+    new dom.window.MessageEvent("message", {
+      data: { type: "error", id: "alpha", message: "Send failed" },
+    }),
+  );
+  assert.match(question.value, /Please review[\s\S]*Please check this\./);
+});
+
+test("the diff file tree and code divider resize without losing the reading area", async (t) => {
+  const { dom, document, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  state.repositories[0]!.status = "ready";
+  const layout = document.querySelector<HTMLElement>("#diff-layout")!;
+  const tree = document.querySelector<HTMLElement>("#diff-tree")!;
+  const treeDivider =
+    document.querySelector<HTMLElement>("#diff-tree-divider")!;
+  const split = document.querySelector<HTMLElement>("#diff-split")!;
+  const divider = document.querySelector<HTMLElement>("#diff-divider")!;
+  let width = 908;
+  Object.defineProperty(layout, "clientWidth", { get: () => width });
+  Object.defineProperty(split, "getBoundingClientRect", {
+    value: () => ({ left: 20, width: 472 }),
+  });
+  const pointer = (
+    target: EventTarget,
+    type: string,
+    x: number,
+    id = 1,
+  ): void => {
+    const event = new dom.window.MouseEvent(type, {
+      button: 0,
+      clientX: x,
+      bubbles: true,
+    });
+    Object.defineProperty(event, "pointerId", { value: id });
+    target.dispatchEvent(event);
+  };
+  publish(state);
+  document.querySelector<HTMLButtonElement>("#open-local-diff")!.click();
+  assert.equal(tree.style.flexBasis, "180px");
+  assert.equal(treeDivider.getAttribute("aria-controls"), "diff-tree");
+  pointer(treeDivider, "pointerdown", 100);
+  pointer(document, "pointermove", 200, 2);
+  assert.equal(tree.style.flexBasis, "180px");
+  pointer(document, "pointermove", 200);
+  assert.equal(tree.style.flexBasis, "280px");
+  assert.equal(layout.classList.contains("resizing-tree"), true);
+  pointer(document, "pointerup", 200);
+  assert.equal(layout.classList.contains("resizing-tree"), false);
+  treeDivider.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", { key: "ArrowRight" }),
+  );
+  assert.equal(tree.style.flexBasis, "296px");
+  assert.equal(treeDivider.getAttribute("aria-valuenow"), "296");
+
+  width = 208;
+  dom.window.dispatchEvent(new dom.window.Event("resize"));
+  assert.ok(parseFloat(tree.style.flexBasis) < 60);
+  width = 908;
+  dom.window.dispatchEvent(new dom.window.Event("resize"));
+  assert.equal(tree.style.flexBasis, "296px");
+  pointer(treeDivider, "pointerdown", 100);
+  pointer(document, "pointermove", 10_000);
+  assert.equal(tree.style.flexBasis, "580px");
+  pointer(document, "pointercancel", 10_000);
+
+  pointer(divider, "pointerdown", 0);
+  pointer(document, "pointermove", 344);
+  pointer(document, "pointerup", 344);
+  assert.equal(divider.getAttribute("aria-valuenow"), "75");
+  assert.match(split.style.gridTemplateColumns, /48px.*24px$/);
+});
+
+test("the diff overview maps full-file changes, tracks scrolling and navigates both sides", async (t) => {
+  const { dom, document, posted, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  state.repositories[0]!.status = "ready";
+  const old = document.querySelector<HTMLElement>("#diff-old")!;
+  const current = document.querySelector<HTMLElement>("#diff-new")!;
+  const overview = document.querySelector<HTMLElement>("#diff-overview")!;
+  const oldWindow = document.querySelector<HTMLElement>(
+    "#diff-overview-old-window",
+  )!;
+  const newWindow = document.querySelector<HTMLElement>(
+    "#diff-overview-new-window",
+  )!;
+  const removed = document.querySelector("#diff-overview-removed")!;
+  const added = document.querySelector("#diff-overview-added")!;
+  Object.defineProperty(old, "clientHeight", { value: 200 });
+  Object.defineProperty(current, "clientHeight", { value: 200 });
+  Object.defineProperty(overview, "getBoundingClientRect", {
+    value: () => ({ left: 100, top: 10, width: 24, height: 200 }),
+  });
+  const reply = (data: object): void => {
+    dom.window.dispatchEvent(new dom.window.MessageEvent("message", { data }));
+  };
+  const makeFile = (
+    path: string,
+    oldLines: string[],
+    newLines: string[],
+    changes: DiffChange[],
+    binary = false,
+  ): DiffFile => ({
+    path,
+    status: "M",
+    oldLines,
+    newLines,
+    changes,
+    binary,
+    oldNoFinalNewline: false,
+    newNoFinalNewline: false,
+  });
+  const fileReply = (file: DiffFile): void => {
+    const request = posted.at(-1)!;
+    if (request.type !== "local-diff") assert.fail();
+    assert.equal(request.path, file.path);
+    reply({
+      type: "local-diff",
+      id: "alpha",
+      view: "copilot",
+      requestId: request.requestId,
+      file,
+    });
+  };
+  const choose = (path: string): void => {
+    document
+      .querySelector<HTMLButtonElement>(
+        `#diff-tree button[data-path="${path}"]`,
+      )!
+      .click();
+  };
+  publish(state);
+  document.querySelector<HTMLButtonElement>("#open-local-diff")!.click();
+  const request = posted.at(-1)!;
+  if (request.type !== "local-diff") assert.fail();
+  reply({
+    type: "local-diff",
+    id: "alpha",
+    view: "copilot",
+    requestId: request.requestId,
+    list: {
+      commit: "a".repeat(40),
+      machine: "Local",
+      repositoryPath: "/projects/alpha",
+      files: [
+        "a.txt",
+        "b.bin",
+        "add.txt",
+        "delete.txt",
+        "unchanged.txt",
+        "error.txt",
+      ].map((path) => ({ path, status: "M" })),
+    },
+  });
+  const lines = (count: number): string[] =>
+    Array.from({ length: count }, (_, index) => `Line ${index + 1}`);
+  fileReply(
+    makeFile("a.txt", lines(100), lines(102), [
+      { oldStart: 0, oldCount: 1, newStart: 0, newCount: 2 },
+      { oldStart: 40, oldCount: 0, newStart: 41, newCount: 3 },
+      { oldStart: 80, oldCount: 2, newStart: 84, newCount: 0 },
+      { oldStart: 99, oldCount: 1, newStart: 101, newCount: 1 },
+    ]),
+  );
+  assert.equal(overview.getAttribute("aria-disabled"), "false");
+  assert.equal(overview.tabIndex, 0);
+  const oldMarks = removed.getAttribute("d")!;
+  const newMarks = added.getAttribute("d")!;
+  assert.equal((oldMarks.match(/M/g) ?? []).length, 3);
+  assert.equal((newMarks.match(/M/g) ?? []).length, 3);
+  assert.match(oldMarks, /^M\.15 0\.00h\.7v100\.00/);
+  assert.match(oldMarks, /M\.15 9900\.00h\.7v100\.00/);
+  assert.match(newMarks, /M1\.15 9901\.96h\.7v98\.04/);
+  assert.equal(oldWindow.hidden, false);
+  assert.equal(newWindow.hidden, false);
+  assert.equal(oldWindow.style.height, "10%");
+
+  old.scrollTop = 600;
+  old.dispatchEvent(new dom.window.Event("scroll"));
+  assert.equal(current.scrollTop, 620);
+  assert.equal(oldWindow.style.top, "30%");
+  assert.ok(
+    Math.abs(parseFloat(newWindow.style.top) - (620 / 2040) * 100) < 0.001,
+  );
+  assert.equal(removed.getAttribute("d"), oldMarks);
+  assert.equal(added.getAttribute("d"), newMarks);
+  overview.dispatchEvent(
+    new dom.window.MouseEvent("click", {
+      clientX: 120,
+      clientY: 210,
+      bubbles: true,
+    }),
+  );
+  assert.equal(current.scrollTop, 1840);
+  assert.equal(old.scrollTop, 1800);
+  assert.equal(
+    overview.getAttribute("aria-valuetext"),
+    "working tree lines 93 to 102 of 102",
+  );
+  overview.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", { key: "Home" }),
+  );
+  assert.equal(current.scrollTop, 0);
+  assert.equal(old.scrollTop, 0);
+  overview.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", { key: "PageDown" }),
+  );
+  assert.equal(current.scrollTop, 200);
+
+  choose("b.bin");
+  assert.equal(removed.getAttribute("d"), "");
+  assert.equal(overview.getAttribute("aria-disabled"), "true");
+  assert.equal(oldWindow.hidden, true);
+  assert.equal(newWindow.hidden, true);
+  fileReply(makeFile("b.bin", [], [], [], true));
+  assert.equal(overview.getAttribute("aria-disabled"), "true");
+  assert.equal(overview.tabIndex, -1);
+
+  choose("add.txt");
+  fileReply(
+    makeFile("add.txt", [], lines(100), [
+      { oldStart: 0, oldCount: 0, newStart: 0, newCount: 100 },
+    ]),
+  );
+  assert.equal(removed.getAttribute("d"), "");
+  assert.notEqual(added.getAttribute("d"), "");
+  assert.equal(oldWindow.hidden, true);
+  overview.dispatchEvent(
+    new dom.window.MouseEvent("click", { clientX: 102, clientY: 110 }),
+  );
+  assert.equal(current.scrollTop, 900);
+
+  choose("delete.txt");
+  fileReply(
+    makeFile(
+      "delete.txt",
+      lines(100),
+      [],
+      [{ oldStart: 0, oldCount: 100, newStart: 0, newCount: 0 }],
+    ),
+  );
+  assert.notEqual(removed.getAttribute("d"), "");
+  assert.equal(added.getAttribute("d"), "");
+  assert.equal(newWindow.hidden, true);
+  overview.dispatchEvent(
+    new dom.window.MouseEvent("click", { clientX: 120, clientY: 110 }),
+  );
+  assert.equal(old.scrollTop, 900);
+
+  choose("unchanged.txt");
+  fileReply(makeFile("unchanged.txt", lines(2), lines(2), []));
+  assert.equal(overview.getAttribute("aria-disabled"), "false");
+  assert.equal(removed.getAttribute("d"), "");
+  assert.equal(added.getAttribute("d"), "");
+  choose("error.txt");
+  const failing = posted.at(-1)!;
+  if (failing.type !== "local-diff") assert.fail();
+  reply({
+    type: "local-diff",
+    id: "alpha",
+    view: "copilot",
+    requestId: failing.requestId,
+    error: "Cannot read file",
+  });
+  assert.equal(overview.getAttribute("aria-disabled"), "true");
+  assert.equal(added.getAttribute("d"), "");
+  document.querySelector<HTMLButtonElement>("#diff-back")!.click();
+  assert.equal(overview.tabIndex, -1);
+});
+
+test("diff notes follow the selected session and stale results cannot replace it", async (t) => {
+  const { dom, document, posted, publish, state } = await setup(t);
+  state.repositories.forEach((repository) => {
+    repository.status = "ready";
+  });
+  state.repositories[0]!.view = "copilot:one";
+  state.repositories[0]!.sessions = [
+    {
+      view: "copilot:one",
+      backend: "copilot",
+      status: "ready",
+      open: true,
+      generation: 1,
+    },
+    {
+      view: "copilot:two",
+      backend: "copilot",
+      status: "ready",
+      open: true,
+      generation: 1,
+    },
+  ];
+  state.activeId = "alpha";
+  publish(state);
+  const open = document.querySelector<HTMLButtonElement>("#open-local-diff")!;
+  open.click();
+  const first = posted.at(-1)!;
+  if (first.type !== "local-diff") assert.fail();
+  const notes = document.querySelector<HTMLTextAreaElement>("#diff-notes")!;
+  notes.value = "Alpha review";
+  notes.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  state.repositories[0]!.view = "copilot:two";
+  publish(state);
+  assert.deepEqual(posted.at(-1), {
+    type: "close-diff",
+    id: "alpha",
+    view: "copilot:one",
+  });
+  open.click();
+  assert.equal(notes.value, "");
+  state.repositories[0]!.view = "copilot:one";
+  publish(state);
+  open.click();
+  assert.equal(notes.value, "Alpha review");
+  state.activeId = "beta";
+  publish(state);
+  assert.equal(
+    document.querySelector<HTMLElement>("#local-diff-view")!.hidden,
+    true,
+  );
+  open.click();
+  assert.equal(notes.value, "");
+  dom.window.dispatchEvent(
+    new dom.window.MessageEvent("message", {
+      data: {
+        type: "local-diff",
+        id: "alpha",
+        view: first.view,
+        requestId: first.requestId,
+        error: "stale",
+      },
+    }),
+  );
+  assert.equal(
+    document.querySelector<HTMLElement>("#diff-error")!.hidden,
+    true,
+  );
+  state.activeId = "alpha";
+  publish(state);
+  open.click();
+  assert.equal(notes.value, "Alpha review");
+});
+
+test("diff change navigation crosses files and skips binary files", async (t) => {
+  const { dom, document, posted, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  state.repositories[0]!.status = "ready";
+  publish(state);
+  document.querySelector<HTMLButtonElement>("#open-local-diff")!.click();
+  const listRequest = posted.at(-1)!;
+  if (listRequest.type !== "local-diff") assert.fail();
+  const reply = (data: object): void => {
+    dom.window.dispatchEvent(new dom.window.MessageEvent("message", { data }));
+  };
+  reply({
+    type: "local-diff",
+    id: "alpha",
+    view: "copilot",
+    requestId: listRequest.requestId,
+    list: {
+      commit: "a".repeat(40),
+      machine: "Local",
+      repositoryPath: "/projects/alpha",
+      files: ["a.txt", "b.bin", "c.txt"].map((path) => ({ path, status: "M" })),
+    },
+  });
+  const fileReply = (path: string, binary = false): void => {
+    const request = posted.at(-1)!;
+    if (request.type !== "local-diff") assert.fail();
+    assert.equal(request.path, path);
+    reply({
+      type: "local-diff",
+      id: "alpha",
+      view: "copilot",
+      requestId: request.requestId,
+      file: {
+        path,
+        status: "M",
+        oldLines: binary ? [] : ["old"],
+        newLines: binary ? [] : ["new"],
+        changes: binary
+          ? []
+          : [{ oldStart: 0, oldCount: 1, newStart: 0, newCount: 1 }],
+        binary,
+        oldNoFinalNewline: false,
+        newNoFinalNewline: false,
+      },
+    });
+  };
+  fileReply("a.txt");
+  const next = document.querySelector<HTMLButtonElement>("#diff-next")!;
+  const previous = document.querySelector<HTMLButtonElement>("#diff-previous")!;
+  next.click();
+  assert.equal(next.disabled, false);
+  next.click();
+  fileReply("b.bin", true);
+  fileReply("c.txt");
+  assert.equal(document.querySelector("#diff-filename")!.textContent, "c.txt");
+  assert.match(
+    document.querySelector("#diff-file-status")!.textContent!,
+    /Change 1 of 1/,
+  );
+  assert.equal(next.disabled, true);
+  previous.click();
+  fileReply("b.bin", true);
+  fileReply("a.txt");
+  assert.equal(document.querySelector("#diff-filename")!.textContent, "a.txt");
+  assert.equal(previous.disabled, true);
+});
+
+test("a PR diff opens without a session and sends pinned line references to the agent", async (t) => {
+  const url = "https://github.com/acme/project/pull/42";
+  const { dom, document, posted, publish, state, open } = await setupDiscussion(
+    t,
+    url,
+  );
+  const button = document.querySelector<HTMLButtonElement>(
+    "#github-discussion-diff",
+  )!;
+  assert.equal(button.hidden, false);
+  button.click();
+  const listRequest = posted.at(-1)!;
+  assert.equal(listRequest.type, "pull-diff");
+  if (listRequest.type !== "pull-diff") assert.fail();
+  assert.deepEqual(parseApplicationMessage(listRequest), listRequest);
+  assert.equal(listRequest.url, url);
+  assert.equal(listRequest.view, "copilot");
+  assert.equal(
+    document.querySelector("#diff-heading")!.textContent,
+    "Pull request diff",
+  );
+  assert.equal(document.querySelector("#diff-old-label")!.textContent, "Base");
+  assert.equal(
+    document.querySelector("#diff-new-label")!.textContent,
+    "PR head",
+  );
+  const reply = (data: object): void => {
+    dom.window.dispatchEvent(new dom.window.MessageEvent("message", { data }));
+  };
+  const baseCommit = "a".repeat(40);
+  const headCommit = "b".repeat(40);
+  reply({
+    type: "pull-diff",
+    id: "alpha",
+    view: "copilot",
+    url,
+    requestId: listRequest.requestId,
+    list: {
+      url,
+      baseCommit,
+      headCommit,
+      files: [
+        { path: "src/new name.ts", oldPath: "src/old name.ts", status: "R" },
+      ],
+    },
+  });
+  const fileRequest = posted.at(-1)!;
+  if (fileRequest.type !== "pull-diff") assert.fail();
+  assert.equal(fileRequest.path, "src/new name.ts");
+  reply({
+    type: "pull-diff",
+    id: "alpha",
+    view: "copilot",
+    url,
+    requestId: fileRequest.requestId,
+    file: {
+      path: "src/new name.ts",
+      oldPath: "src/old name.ts",
+      status: "R",
+      oldLines: ["old"],
+      newLines: ["new"],
+      changes: [{ oldStart: 0, oldCount: 1, newStart: 0, newCount: 1 }],
+      binary: false,
+      oldNoFinalNewline: false,
+      newNoFinalNewline: false,
+    },
+  });
+  assert.match(
+    document.querySelector("#diff-status")!.textContent!,
+    /base a{12}.*head b{12}/,
+  );
+  assert.equal(
+    document.querySelector("#diff-filename")!.textContent,
+    "src/old name.ts → src/new name.ts",
+  );
+  assert.equal(
+    document.querySelector("#diff-overview")!.getAttribute("aria-disabled"),
+    "false",
+  );
+  assert.match(
+    document.querySelector("#diff-overview-added")!.getAttribute("d")!,
+    /^M1\.15/,
+  );
+  (document.querySelector("#diff-old .diff-line span") as HTMLElement).click();
+  (document.querySelector("#diff-new .diff-line span") as HTMLElement).click();
+  const notes = document.querySelector<HTMLTextAreaElement>("#diff-notes")!;
+  assert.match(
+    notes.value,
+    new RegExp(
+      `\\[src/old name\\.ts:1\\]\\(https://github\\.com/acme/project/blob/${baseCommit}/src/old%20name\\.ts#L1\\) \\(PR base a{12}\\)`,
+    ),
+  );
+  assert.match(
+    notes.value,
+    new RegExp(
+      `\\[src/new name\\.ts:1\\]\\(https://github\\.com/acme/project/blob/${headCommit}/src/new%20name\\.ts#L1\\) \\(PR head b{12}\\)`,
+    ),
+  );
+  const send = document.querySelector<HTMLButtonElement>("#diff-send")!;
+  assert.equal(send.disabled, true);
+  document.querySelector<HTMLButtonElement>("#diff-back")!.click();
+  assert.equal(
+    document.querySelector("#diff-overview-added")!.getAttribute("d"),
+    "",
+  );
+  assert.equal(
+    document.querySelector<HTMLElement>("#github-discussion")!.hidden,
+    false,
+  );
+  assert.equal(posted.at(-1)?.type, "close-diff");
+  state.repositories[0]!.status = "ready";
+  state.repositories[0]!.view = "copilot:one";
+  state.repositories[0]!.sessions = [
+    {
+      view: "copilot:one",
+      backend: "copilot",
+      status: "ready",
+      open: true,
+      generation: 1,
+    },
+  ];
+  publish(state);
+  button.click();
+  assert.match(notes.value, /old name\.ts/);
+  const nextRequest = posted.at(-1)!;
+  if (nextRequest.type !== "pull-diff") assert.fail();
+  assert.equal(nextRequest.view, "copilot:one");
+  reply({
+    type: "pull-diff",
+    id: "alpha",
+    view: "copilot:one",
+    url,
+    requestId: listRequest.requestId,
+    error: "stale",
+  });
+  assert.equal(
+    document.querySelector<HTMLElement>("#diff-error")!.hidden,
+    true,
+  );
+  reply({
+    type: "pull-diff",
+    id: "alpha",
+    view: "copilot:one",
+    url,
+    requestId: nextRequest.requestId,
+    list: { url, baseCommit, headCommit, files: [] },
+  });
+  assert.equal(send.disabled, false);
+  notes.value += "Please fix the change.";
+  notes.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  send.click();
+  const sent = posted.filter((message) => message.type === "send").at(-1);
+  if (!sent || sent.type !== "send") assert.fail();
+  assert.equal(sent.view, "copilot:one");
+  assert.match(sent.question, new RegExp(`Pull request: ${url}`));
+  assert.match(
+    sent.question,
+    new RegExp(`Comparison: ${baseCommit}\\.\\.\\.${headCommit}`),
+  );
+  assert.match(sent.question, /Please fix the change/);
+  open("https://github.com/acme/project/issues/1");
+  assert.equal(button.hidden, true);
+});
+
+test("PR diff errors stay visible and refresh retries without changing the discussion", async (t) => {
+  const url = "https://github.com/acme/project/pull/42";
+  const { dom, document, posted } = await setupDiscussion(t, url);
+  document.querySelector<HTMLButtonElement>("#github-discussion-diff")!.click();
+  const request = posted.at(-1)!;
+  if (request.type !== "pull-diff") assert.fail();
+  dom.window.dispatchEvent(
+    new dom.window.MessageEvent("message", {
+      data: {
+        type: "pull-diff",
+        id: "alpha",
+        view: request.view,
+        url,
+        requestId: request.requestId,
+        error: "GitHub API: access denied.",
+      },
+    }),
+  );
+  assert.match(
+    document.querySelector("#diff-error")!.textContent!,
+    /access denied/,
+  );
+  assert.equal(
+    document.querySelector<HTMLElement>("#diff-error")!.hidden,
+    false,
+  );
+  document.querySelector<HTMLButtonElement>("#diff-refresh")!.click();
+  const retry = posted.at(-1)!;
+  if (retry.type !== "pull-diff") assert.fail();
+  assert.notEqual(retry.requestId, request.requestId);
+  assert.equal(retry.url, url);
+  document.querySelector<HTMLButtonElement>("#diff-back")!.click();
+  assert.equal(
+    document.querySelector<HTMLElement>("#github-discussion")!.hidden,
+    false,
+  );
+  assert.equal(posted.filter((message) => message.type === "send").length, 0);
+});
+
+test("the PR diff is available while its discussion loads or fails", async (t) => {
+  const { document, posted, publish, publishGitHub, state } = await setup(t);
+  const url = "https://github.com/acme/project/pull/42";
+  state.activeId = "alpha";
+  publish(state);
+  publishGitHub({
+    type: "github",
+    id: "alpha",
+    section: "issues",
+    status: "ready",
+    append: false,
+    page: {
+      repository: "acme/project",
+      items: [
+        {
+          id: "pull",
+          title: "#42 PR",
+          url,
+          author: "Ada",
+          date: "2026-01-01T12:00:00Z",
+          mine: false,
+          replied: false,
+          afterMe: false,
+        },
+      ],
+    },
+  });
+  document
+    .querySelector<HTMLButtonElement>(".github-discussion-title")!
+    .click();
+  const button = document.querySelector<HTMLButtonElement>(
+    "#github-discussion-diff",
+  )!;
+  assert.equal(button.hidden, false);
+  publishGitHub({
+    type: "github-discussion",
+    id: "alpha",
+    url,
+    status: "error",
+    error: "Comments unavailable",
+  });
+  assert.equal(button.hidden, false);
+  button.click();
+  const request = posted.at(-1)!;
+  assert.equal(request.type, "pull-diff");
+  if (request.type === "pull-diff") assert.equal(request.url, url);
+});
 
 test("timing bands scale by duration, distinguish tools and separate overlapping work", async (t) => {
   const { dom, document, state, publish } = await setup(t);
@@ -2357,7 +3168,10 @@ test("repository navigation selects without opening and explicit controls open a
       .length,
     2,
   );
-  assert.equal(document.querySelectorAll('[role="separator"]').length, 1);
+  assert.equal(
+    document.querySelectorAll('.application > [role="separator"]').length,
+    1,
+  );
   assert.deepEqual(
     [...document.querySelectorAll("#github-tabs button")].map(
       (button) => button.textContent,
