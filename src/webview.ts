@@ -2118,6 +2118,11 @@ declare function acquireVsCodeApi(): {
             model.busy ? "running a request" : model.status,
             String(model.sessions.length),
             autoStop(model.busy, model.idleStopAt),
+            model.cachePolicy === "shared-prefix"
+              ? "Shared prefix cache; request cache released after generation"
+              : model.cachePolicy === "per-session"
+                ? "Per-session KV cache; retained between requests"
+                : "Runtime-managed cache",
           ],
           model.id ?? "",
           !model.id || model.busy || model.status === "loading",
@@ -2137,6 +2142,7 @@ declare function acquireVsCodeApi(): {
             worker.busy ? "running a request" : "ready",
             String(worker.sessions.length),
             autoStop(worker.busy, worker.idleStopAt),
+            "Managed by Copilot CLI",
           ],
           `copilot:${worker.groupId}`,
           worker.busy,

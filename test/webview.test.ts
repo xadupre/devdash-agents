@@ -6575,9 +6575,17 @@ test("the worker table lists running workers and stops idle ones on demand", asy
       busy: false,
       workerName: "Qwen CUDA",
       machineName: "GPU host",
+      cachePolicy: "per-session",
       idleStopAt: new Date(2026, 0, 1, 14, 5).getTime(),
     },
-    { ...base, id: "busy", busy: true, workerName: "Busy", machineName: "X" },
+    {
+      ...base,
+      id: "busy",
+      busy: true,
+      workerName: "Busy",
+      machineName: "X",
+      cachePolicy: "shared-prefix",
+    },
     { ...base, id: "off", busy: false, status: "unloaded", device: undefined },
   ]);
   const rows = [
@@ -6598,12 +6606,30 @@ test("the worker table lists running workers and stops idle ones on demand", asy
     `at ${new Date(2026, 0, 1, 14, 5).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
   );
   assert.equal(rows[1]!.cells[6]!.textContent, "not while running");
+  assert.equal(
+    document.querySelectorAll("#worker-table th")[7]!.textContent,
+    "Cache policy",
+  );
+  assert.equal(
+    rows[0]!.cells[7]!.textContent,
+    "Per-session KV cache; retained between requests",
+  );
+  assert.equal(
+    rows[1]!.cells[7]!.textContent,
+    "Shared prefix cache; request cache released after generation",
+  );
+  assert.equal(rows[0]!.cells.length, 9);
   assert.equal(rows[1]!.querySelector("button")!.disabled, true);
   rows[0]!.querySelector("button")!.click();
   assert.deepEqual(posted.at(-1), {
     type: "stop-local-worker",
     hostId: "idle",
   });
+  send([{ ...base, id: "legacy", busy: false }]);
+  assert.equal(
+    document.querySelector("#worker-table tbody tr")!.children[7]!.textContent,
+    "Runtime-managed cache",
+  );
   dom.window.dispatchEvent(
     new dom.window.MessageEvent("message", {
       data: {
@@ -6634,7 +6660,7 @@ test("the worker table lists running workers and stops idle ones on demand", asy
     ...document.querySelectorAll<HTMLTableRowElement>("#worker-table tbody tr"),
   ];
   assert.deepEqual(
-    [...copilotRows[0]!.cells].slice(0, 7).map((cell) => cell.textContent),
+    [...copilotRows[0]!.cells].slice(0, 8).map((cell) => cell.textContent),
     [
       "Copilot @ GPU",
       "GPU host",
@@ -6643,6 +6669,7 @@ test("the worker table lists running workers and stops idle ones on demand", asy
       "ready",
       "1",
       "never",
+      "Managed by Copilot CLI",
     ],
   );
   assert.equal(copilotRows[1]!.querySelector("button")!.disabled, true);
