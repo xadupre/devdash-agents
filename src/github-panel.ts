@@ -1,5 +1,7 @@
 import {
   GitHubRepository,
+  type GitHubCiPage,
+  type GitHubPage,
   type GitHubDiscussionUpdate,
   type GitHubCommentUpdate,
   type GitHubSection,
@@ -42,10 +44,15 @@ export class GitHubPanel {
       section,
       append: Boolean(cursor),
     };
-    return this.request(
+    return this.request<GitHubPage | GitHubCiPage>(
       repository,
       JSON.stringify([repository.id, section]),
-      (signal) => this.create(repository).load(section, cursor, signal),
+      async (signal): Promise<GitHubPage | GitHubCiPage> => {
+        const github = this.create(repository);
+        return section === "ci"
+          ? await github.loadCi(signal)
+          : await github.load(section, cursor, signal);
+      },
       (update) =>
         this.publish({
           ...base,

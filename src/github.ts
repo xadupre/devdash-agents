@@ -15,7 +15,13 @@ import {
 import type { SessionView } from "./application";
 
 export type GitHubSection =
-  "issues" | "reviews" | "oldest-prs" | "comments" | "commits" | "mentions";
+  | "issues"
+  | "reviews"
+  | "oldest-prs"
+  | "comments"
+  | "commits"
+  | "mentions"
+  | "ci";
 export function isGitHubSection(value: unknown): value is GitHubSection {
   return [
     "issues",
@@ -24,6 +30,7 @@ export function isGitHubSection(value: unknown): value is GitHubSection {
     "comments",
     "commits",
     "mentions",
+    "ci",
   ].some((section) => section === value);
 }
 
@@ -53,13 +60,35 @@ export interface GitHubPage {
   cursor?: string;
   notice?: string;
 }
+export interface GitHubWorkflowRun {
+  id: number;
+  status: string;
+  conclusion?: string;
+  createdAt: string;
+  url: string;
+}
+export interface GitHubWorkflowHealth {
+  id: number;
+  name: string;
+  url: string;
+  latest?: GitHubWorkflowRun;
+  latestError?: string;
+  ratio?: { failed: number; total: number };
+  ratioError?: string;
+}
+export interface GitHubCiPage {
+  repository: string;
+  defaultBranch: string;
+  fetchedAt: string;
+  workflows: GitHubWorkflowHealth[];
+}
 export interface GitHubUpdate {
   type: "github";
   id: string;
   section: GitHubSection;
   status: "loading" | "ready" | "error";
   append: boolean;
-  page?: GitHubPage;
+  page?: GitHubPage | GitHubCiPage;
   error?: string;
 }
 
@@ -216,6 +245,12 @@ function date(value: unknown): string {
     throw new Error("Invalid GitHub response: expected a timestamp.");
   }
   return result;
+}
+function positiveInteger(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error("Invalid GitHub response: expected a positive integer.");
+  }
+  return value;
 }
 function author(value: unknown): string {
   return value === null ? "[deleted]" : text(record(value).login);
@@ -740,7 +775,7 @@ export class GitHubRepository {
   }
 
   async load(
-    section: GitHubSection,
+    section: Exclude<GitHubSection, "ci">,
     cursor: string | undefined,
     callerSignal: AbortSignal,
   ): Promise<GitHubPage> {
@@ -757,8 +792,22 @@ export class GitHubRepository {
     }
   }
 
+  async loadCi(callerSignal: AbortSignal): Promise<GitHubCiPage> {
+    const lifetime = new AbortController();
+    const signal = AbortSignal.any([
+      callerSignal,
+      lifetime.signal,
+      AbortSignal.timeout(120_000),
+    ]);
+    try {
+      return await this.ci(signal);
+    } finally {
+      lifetime.abort();
+    }
+  }
+
   private async read(
-    section: GitHubSection,
+    section: Exclude<GitHubSection, "ci">,
     cursor: string | undefined,
     signal: AbortSignal,
   ): Promise<GitHubPage> {
@@ -945,6 +994,258 @@ export class GitHubRepository {
       items: await this.items(page.nodes, identity, signal, false),
       cursor: page.cursor,
       notice: "Open discussions, most recently updated first.",
+    };
+  }
+
+  private async ci(signal: AbortSignal): Promise<GitHubCiPage> {
+    const repository = record(
+      JSON.parse(
+        await this.run(
+          "gh",
+          ["repo", "view", "--json", "nameWithOwner,url"],
+          this.cwd,
+          signal,
+        ),
+      ),
+    );
+    const nameWithOwner = text(repository.nameWithOwner);
+    const [owner, name, extra] = nameWithOwner.split("/");
+    if (!owner || !name || extra) {
+      throw new Error("Invalid GitHub repository identity.");
+    }
+    const repositoryUrl = new URL(url(repository.url));
+    const host = repositoryUrl.hostname;
+    const repositoryPath = `${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
+    const api = async (
+      path: string,
+      parameters: Record<string, string> = {},
+    ): Promise<Record<string, unknown>> => {
+      signal.throwIfAborted();
+      const args = ["api", "--hostname", host, "--method", "GET", path];
+      for (const [key, value] of Object.entries(parameters)) {
+        args.push("-f", `${key}=${value}`);
+      }
+      return record(JSON.parse(await this.run("gh", args, this.cwd, signal)));
+    };
+    const apiRepository = await api(`repos/${owner}/${name}`);
+    const defaultBranch = text(apiRepository.default_branch);
+    const workflowData = await api(`repos/${owner}/${name}/actions/workflows`, {
+      per_page: "100",
+    });
+    if (
+      typeof workflowData.total_count !== "number" ||
+      !Number.isSafeInteger(workflowData.total_count) ||
+      workflowData.total_count < 0 ||
+      !Array.isArray(workflowData.workflows)
+    ) {
+      throw new Error("Invalid GitHub response: expected workflow results.");
+    }
+    if (workflowData.total_count > 100) {
+      throw new Error("Too many workflows to display.");
+    }
+    if (workflowData.workflows.length !== workflowData.total_count) {
+      throw new Error("Incomplete workflow results.");
+    }
+    const workflows = workflowData.workflows.map((value) => {
+      const workflow = record(value);
+      const id = positiveInteger(workflow.id);
+      return {
+        id,
+        name: text(workflow.name),
+        url: new URL(
+          `${repositoryPath}/actions/workflows/${id}`,
+          `${repositoryUrl.origin}/`,
+        ).toString(),
+      };
+    });
+    const failures = new Set(["failure", "timed_out", "startup_failure"]);
+    const workflowRun = (value: unknown): GitHubWorkflowRun =>
+      this.workflowRun(value, repositoryPath, repositoryUrl.origin);
+    const latestRun = async (
+      id: number,
+    ): Promise<GitHubWorkflowRun | undefined> => {
+      const path = `repos/${owner}/${name}/actions/workflows/${id}/runs`;
+      const eligible = (value: unknown): boolean => {
+        const run = record(value);
+        const event = text(run.event);
+        if (event === "pull_request" || event === "pull_request_target")
+          return false;
+        return (
+          text(run.head_branch) === defaultBranch &&
+          text(record(run.head_repository).full_name).toLowerCase() ===
+            nameWithOwner.toLowerCase()
+        );
+      };
+      const readPage = async (page: number, perPage: number) => {
+        const data = await api(path, {
+          branch: defaultBranch,
+          page: String(page),
+          per_page: String(perPage),
+        });
+        if (
+          typeof data.total_count !== "number" ||
+          !Number.isSafeInteger(data.total_count) ||
+          data.total_count < 0 ||
+          !Array.isArray(data.workflow_runs) ||
+          data.workflow_runs.length > perPage
+        ) {
+          throw new Error("Invalid GitHub response: expected workflow runs.");
+        }
+        return { total: data.total_count, runs: data.workflow_runs };
+      };
+      const first = await readPage(1, 1);
+      if (!first.runs.length) {
+        if (first.total !== 0) throw new Error("Incomplete latest runs.");
+        return undefined;
+      }
+      if (first.total === 0) throw new Error("Incomplete latest runs.");
+      if (eligible(first.runs[0])) return workflowRun(first.runs[0]);
+
+      const seen = new Set<number>();
+      let total: number | undefined;
+      for (let page = 1; page <= 10; page++) {
+        const result = await readPage(page, 100);
+        if (total === undefined) total = result.total;
+        if (result.total !== total || seen.size + result.runs.length > total)
+          throw new Error("Incomplete latest runs.");
+        for (const value of result.runs) {
+          const run = workflowRun(value);
+          if (seen.has(run.id)) throw new Error("Duplicate latest runs.");
+          seen.add(run.id);
+          if (eligible(value)) return run;
+        }
+        if (seen.size === total) return undefined;
+        if (result.runs.length !== 100) {
+          throw new Error("Incomplete latest runs.");
+        }
+      }
+      throw new Error("Too many runs to find the latest default-branch run.");
+    };
+    const dailyRatio = async (
+      id: number,
+      since: string,
+      until: string,
+    ): Promise<{ failed: number; total: number }> => {
+      const runs = new Map<number, GitHubWorkflowRun>();
+      let totalCount: number | undefined;
+      for (let page = 1; page <= 10; page++) {
+        const data = await api(
+          `repos/${owner}/${name}/actions/workflows/${id}/runs`,
+          {
+            created: `${since}..${until}`,
+            page: String(page),
+            per_page: "100",
+          },
+        );
+        if (
+          typeof data.total_count !== "number" ||
+          !Number.isSafeInteger(data.total_count) ||
+          data.total_count < 0 ||
+          !Array.isArray(data.workflow_runs)
+        ) {
+          throw new Error("Invalid GitHub response: expected workflow runs.");
+        }
+        if (totalCount === undefined) totalCount = data.total_count;
+        if (data.total_count !== totalCount) {
+          throw new Error("Incomplete 24-hour results.");
+        }
+        if (totalCount > 1000) {
+          throw new Error(
+            "Too many runs to calculate a complete 24-hour ratio.",
+          );
+        }
+        for (const value of data.workflow_runs) {
+          const run = workflowRun(value);
+          if (runs.has(run.id)) {
+            throw new Error("Duplicate runs in 24-hour results.");
+          }
+          const created = Date.parse(run.createdAt);
+          if (created < Date.parse(since) || created > Date.parse(until)) {
+            throw new Error("Run is outside the 24-hour results window.");
+          }
+          runs.set(run.id, run);
+        }
+        if (runs.size === totalCount) break;
+      }
+      if (runs.size !== totalCount) {
+        throw new Error("Incomplete 24-hour results.");
+      }
+      const completed = [...runs.values()].filter(
+        (run) =>
+          run.status === "completed" &&
+          (run.conclusion === "success" || failures.has(run.conclusion ?? "")),
+      );
+      return {
+        failed: completed.filter((run) => failures.has(run.conclusion ?? ""))
+          .length,
+        total: completed.length,
+      };
+    };
+    const now = new Date();
+    const since = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    const until = now.toISOString();
+    const health: GitHubWorkflowHealth[] = [];
+    for (let offset = 0; offset < workflows.length; offset += 4) {
+      signal.throwIfAborted();
+      health.push(
+        ...(await Promise.all(
+          workflows.slice(offset, offset + 4).map(async (workflow) => {
+            const [latestResult, ratioResult] = await Promise.allSettled([
+              latestRun(workflow.id),
+              dailyRatio(workflow.id, since, until),
+            ]);
+            return {
+              ...workflow,
+              ...(latestResult.status === "fulfilled"
+                ? latestResult.value
+                  ? { latest: latestResult.value }
+                  : {}
+                : {
+                    latestError:
+                      latestResult.reason instanceof Error
+                        ? latestResult.reason.message
+                        : String(latestResult.reason),
+                  }),
+              ...(ratioResult.status === "fulfilled"
+                ? { ratio: ratioResult.value }
+                : {
+                    ratioError:
+                      ratioResult.reason instanceof Error
+                        ? ratioResult.reason.message
+                        : String(ratioResult.reason),
+                  }),
+            };
+          }),
+        )),
+      );
+    }
+    signal.throwIfAborted();
+    return {
+      repository: nameWithOwner,
+      defaultBranch,
+      fetchedAt: now.toISOString(),
+      workflows: health,
+    };
+  }
+
+  private workflowRun(
+    value: unknown,
+    repositoryPath: string,
+    origin: string,
+  ): GitHubWorkflowRun {
+    const run = record(value);
+    const id = positiveInteger(run.id);
+    const conclusion =
+      run.conclusion === null ? undefined : text(run.conclusion);
+    return {
+      id,
+      status: text(run.status),
+      ...(conclusion ? { conclusion } : {}),
+      createdAt: date(run.created_at),
+      url: new URL(
+        `${repositoryPath}/actions/runs/${id}`,
+        `${origin}/`,
+      ).toString(),
     };
   }
 

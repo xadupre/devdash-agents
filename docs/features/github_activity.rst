@@ -2,8 +2,9 @@ GitHub activity
 ===============
 
 Select **Github** at the top of the right panel. It follows the selected
-repository and provides six views:
-**Issues**, **Reviews**, **Oldest PRs**, **Commits**, **Comments** and **Mentions**.
+repository and provides seven views:
+**Issues**, **Reviews**, **Oldest PRs**, **Commits**, **Comments**, **Mentions**
+and **CI**.
 GitHub reads are independent of Copilot and do not consume model requests.
 
 Issues and reviews
@@ -112,6 +113,16 @@ Commits
 **Commits** displays the latest 30 commits on the current local branch. A commit
 opens on GitHub when a GitHub remote is available. Unpushed commits remain in the
 list but may not have a corresponding GitHub page.
+
+CI status
+---------
+
+**CI** shows each workflow's latest default-branch run, excluding pull-request
+runs, and a rolling 24-hour failure ratio across branches. The ratio counts
+completed successes and failures, including timed-out and startup-failed runs;
+pending, cancelled, skipped, neutral and approval-required runs are excluded.
+Empty or incomplete samples and API errors are shown as unavailable. Use
+**Refresh** to fetch the selected repository's current status.
 
 Fetching and ordering
 ---------------------

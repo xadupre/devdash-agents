@@ -19,6 +19,7 @@ import {
 import type {
   GitHubUpdate,
   GitHubPage,
+  GitHubCiPage,
   GitHubDiscussionUpdate,
   GitHubCommentUpdate,
   GitHubDiscussion,
@@ -2413,6 +2414,100 @@ test("the activity sidebar shows viewer flags, preserves cached content during s
   assert.equal(document.getElementById("error")?.hidden, true);
 });
 
+test("CI activity renders per-repository workflow status and failure ratios", async (t) => {
+  const { document, posted, publish, publishGitHub, state } = await setup(t);
+  state.activeId = "alpha";
+  publish(state);
+  document
+    .querySelector<HTMLButtonElement>('#github-tabs [data-section="ci"]')!
+    .click();
+  assert.deepEqual(posted.at(-1), {
+    type: "github",
+    id: "alpha",
+    section: "ci",
+    cursor: undefined,
+  });
+  const page: GitHubCiPage = {
+    repository: "acme/project",
+    defaultBranch: "main",
+    fetchedAt: "2026-01-02T12:00:00Z",
+    workflows: [
+      {
+        id: 12,
+        name: "Build",
+        url: "https://github.com/acme/project/actions/workflows/12",
+        latest: {
+          id: 34,
+          status: "completed",
+          conclusion: "failure",
+          createdAt: "2026-01-02T11:00:00Z",
+          url: "https://github.com/acme/project/actions/runs/34",
+        },
+        ratio: { failed: 3, total: 4 },
+      },
+      {
+        id: 13,
+        name: "<img src=x>",
+        url: "https://github.com/acme/project/actions/workflows/13",
+        latestError: "rate limited",
+        ratioError: "Incomplete 24-hour results",
+      },
+      {
+        id: 14,
+        name: "No runs",
+        url: "https://github.com/acme/project/actions/workflows/14",
+        ratio: { failed: 0, total: 0 },
+      },
+    ],
+  };
+  publishGitHub({
+    type: "github",
+    id: "alpha",
+    section: "ci",
+    status: "ready",
+    append: false,
+    page,
+  });
+  assert.match(
+    document.getElementById("github-status")?.textContent ?? "",
+    /acme\/project - default branch main/,
+  );
+  const rows = [...document.querySelectorAll(".github-ci-table tbody tr")];
+  assert.equal(rows.length, 3);
+  assert.match(rows[0]?.textContent ?? "", /BROKEN: failure/);
+  assert.match(rows[0]?.textContent ?? "", /75.0% \(3\/4\)/);
+  assert.equal(
+    rows[0]?.querySelector("a")?.getAttribute("href"),
+    "https://github.com/acme/project/actions/workflows/12",
+  );
+  assert.match(rows[1]?.textContent ?? "", /Unavailable: rate limited/);
+  assert.match(
+    rows[1]?.textContent ?? "",
+    /Unavailable: Incomplete 24-hour results/,
+  );
+  assert.equal(rows[1]?.querySelector("img"), null);
+  assert.match(rows[2]?.textContent ?? "", /No runs/);
+  assert.match(
+    rows[2]?.textContent ?? "",
+    /N\/A \(no successful or failed runs\)/,
+  );
+  document.getElementById("github-refresh")?.click();
+  assert.deepEqual(posted.at(-1), {
+    type: "github",
+    id: "alpha",
+    section: "ci",
+    cursor: undefined,
+  });
+  state.activeId = "beta";
+  publish(state);
+  assert.deepEqual(posted.at(-1), {
+    type: "github",
+    id: "beta",
+    section: "ci",
+    cursor: undefined,
+  });
+});
+
 test("issue and PR titles open a main-panel reader without changing the conversation or draft", async (t) => {
   const { dom, document, posted, publish, publishGitHub, state } =
     await setup(t);
@@ -3176,7 +3271,15 @@ test("repository navigation selects without opening and explicit controls open a
     [...document.querySelectorAll("#github-tabs button")].map(
       (button) => button.textContent,
     ),
-    ["Issues", "Reviews", "Oldest PRs", "Commits", "Comments", "Mentions"],
+    [
+      "Issues",
+      "Reviews",
+      "Oldest PRs",
+      "Commits",
+      "Comments",
+      "Mentions",
+      "CI",
+    ],
   );
   assert.deepEqual(
     posted.filter((message) => message.type !== "github"),
